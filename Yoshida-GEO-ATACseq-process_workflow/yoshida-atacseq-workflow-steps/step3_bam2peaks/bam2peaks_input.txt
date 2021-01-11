@@ -1,0 +1,11 @@
+{
+"bam2peaks.moveBamFroms3.s3_container": "yoshida-atacseq/bam/",
+"bam2peaks.movePeaksTos3.s3_container": "yoshida-atacseq/peaks/",
+"bam2peaks.accession_file": "accessions.txt",
+"bam2peaks.group_name_file": "groupName.txt",
+"bam2peaks.genome": "genome.info",
+"bam2peaks.FilterPeaks.bedGraphToBigWig": "../../bedGraphToBigWig",
+"bam2peaks.ProcessTags.pshuf_and_split": "pshuf_and_split.py",
+"bam2peaks.FilterPeaks.bedClip": "../../bedClip",
+"bam2peaks.FilterPeaks.blacklist": "joint_blacklist.bed"
+}

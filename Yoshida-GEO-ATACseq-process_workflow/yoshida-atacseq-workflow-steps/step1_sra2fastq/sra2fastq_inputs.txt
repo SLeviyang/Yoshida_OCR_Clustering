@@ -1,0 +1,4 @@
+{
+"sra2fastq.s3_container": "yoshida-atacseq/fastq/",
+"sra2fastq.accession_file": "accessions.txt"
+}

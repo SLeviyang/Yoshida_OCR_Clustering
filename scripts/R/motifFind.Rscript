@@ -1,0 +1,10 @@
+#!/usr/bin/env Rscript
+
+args <- commandArgs(trailingOnly=TRUE)
+
+if (length(args) != 1)
+  stop("motifFind.Rscript expects 1 command line argument!")
+
+Yoshida_motif_file <- args[1]
+load(Yoshida_motif_file)
+print(length(Yoshida_motifs))

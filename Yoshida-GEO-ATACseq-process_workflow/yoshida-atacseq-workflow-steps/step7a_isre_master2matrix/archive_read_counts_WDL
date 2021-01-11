@@ -1,0 +1,95 @@
+workflow isre_master2cell_type_master {
+
+    # accession_file contains accessions for a cell type
+    # cell_type_file contains the cell type
+
+    File accession_file
+    File cell_type_file
+
+    Array[String] a = read_lines(accession_file)
+    Array[String] g = read_lines(cell_type_file)
+    String cell_type = g[0]
+
+    # for debug
+    #Array[String] a = ["SRR5799394", "SRR5799395"]
+    #String cell_type = "T.4.Th"
+
+    call loadMaster
+
+    scatter (accession in a) {
+        call s3toBed {
+                input:
+                  accession=accession
+        }
+    }
+
+    # cat the bed files and push to s3
+    call intersectBedAndisre {
+      input:
+        bed_files = s3toBed.bed_file,
+        isre_bed = loadMaster.master_bed
+    }
+
+    call intersect2s3 {
+      input:
+        intersect_bed = intersectBedAndisre.intersect_bed,
+        cell_type = cell_type
+    }
+
+
+}
+
+#############################
+task loadMaster {
+    Int we = 10
+    String ll="{"
+    String rr="}"
+
+    command {
+      aws s3 cp s3://yoshida-atacseq/master/master_isre_nonoverlapping.bed master.bed
+      # master format:   chr1	3793964	3793973	peak19273_TCTCNNTTTC	.	1	GAAACTGAGA	True	-2
+      # extend window of isre
+      awk '${ll}print $1 "\t"  $2-${we} "\t" $3+${we} "\t" $4 "\t" $5 "\t" $6 "\t" $7 "\t" $8 "\t" $9${rr}' master.bed > master_window.bed
+    }
+    output {
+      File master_bed = "master_window.bed"
+    }
+}
+
+task s3toBed {
+    String accession
+
+    command {
+        aws s3 cp "s3://yoshida-atacseq/bam/${accession}.bam" "${accession}.bam"
+        bedtools bamtobed -i ${accession}.bam > ${accession}.bed
+    }
+    output {
+        File bed_file="${accession}.bed"
+    }
+}
+
+task intersectBedAndisre {
+  Array[File] bed_files
+  File isre_bed
+
+  command {
+    cat ${sep=" " bed_files} > joint.bed
+    # don't use bedtools sort, uses too much memory!
+    #bedtools sort -i joint.bed > joint_sorted.bed
+    # 20 gigabyte limit
+    sort -S 20G -k 1,1 -k 2,2n joint.bed > joint_sorted.bed
+    bedtools intersect -a ${isre_bed} -b joint_sorted.bed -c > intersected.bed
+  }
+  output {
+    File intersect_bed = "intersected.bed"
+  }
+}
+
+task intersect2s3 {
+  File intersect_bed
+  String cell_type
+
+  command {
+    aws s3 cp ${intersect_bed} "s3://yoshida-atacseq/master2/${cell_type}_master.bed"
+  }
+}

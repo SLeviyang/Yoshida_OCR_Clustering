@@ -1,0 +1,9 @@
+{
+"fastq2bam.s3_container_fastq": "yoshida-atacseq/fastq/",
+"fastq2bam.s3_container_bam": "yoshida-atacseq/bam/",
+"fastq2bam.accession_file": "accessions.txt",
+"fastq2bam.genome": "mm10",
+"fastq2bam.threads_per_alignment": 6,
+"fastq2bam.picard_path": "../../picard.jar",
+"fastq2bam.debug_bam_file": "out.bam"
+}
