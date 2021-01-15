@@ -1,3 +1,8 @@
+# Data
+
+Yoshida RNA-seq: GSE109125
+Yoshida ATAC-seq: GSE100738
+
 # Python Scripts
 
 All python scripts are located in `scripts/Python/`

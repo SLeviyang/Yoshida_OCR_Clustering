@@ -1,4 +1,5 @@
 import configuration as conf
+import Yoshida
 
 import numpy as np
 import pandas as pd
@@ -13,8 +14,6 @@ import itertools as it
 
 # Create peak (row) clusters from the binary master idr matrix
 class create_peak_clusters: 
-    # load the binary, idr master matrix
-    m = mp.master_peaks().load_matrix().astype("float")
     
     peak_cluster_directory = conf.DATA_DIR + "peak_clusters/"
     # file to store edges used in Louvain algorithm
@@ -23,6 +22,8 @@ class create_peak_clusters:
     cluster_file = conf.DATA_DIR + "peak_clusters/clusters.csv"
    
     def __init__(self):
+        # load the binary, idr master matrix
+        self.m = mp.master_peaks().load_matrix().astype("float")
         if not os.path.isdir(self.peak_cluster_directory):
             os.mkdir(self.peak_cluster_directory)           
         if not os.path.isfile(self.edge_file):
@@ -136,10 +137,6 @@ class peak_clusters:
         # DataFrame with columns row and cluster
         self.clusters = create_peak_clusters().load_clusters()
         self.m = mp.master_peaks().load_matrix()
-        self.bed = mp.master_peaks().load_table()
-    
-    def load_bed(self):
-        return self.bed
     
     def load_clusters(self):
         return self.clusters
@@ -147,62 +144,34 @@ class peak_clusters:
     def load_matrix(self):
         return self.m
     
+    def get_cell_types(self):
+        return mp.master_peaks().get_cell_types()
+    
     def get_matrix_column_names(self):
         return mp.master_peaks().get_cell_types()
     
              
-    def get_cluster_sizes(self, min_cluster_size=50):
+    def get_cluster_info(self, num_clusters):
+        info = []
+        for i in range(num_clusters):
+            m = self.form_cluster_matrix(i)
+            g = self.form_cluster_genomics(i)
+            
+            ci = {'cluster':i,
+                  'size':m.shape[0],
+                  'promoters':np.mean(g["dTSS"] < 500),
+                  'enhancers':np.mean(g["dTSS"] > 3000),
+                  'fraction_on':np.mean(m)}
+            info.append(ci)
+        
+        return pd.DataFrame(info)
        
-        cluster_info = self.clusters["cluster"].value_counts()
-        cluster_info = cluster_info[cluster_info > min_cluster_size]
-        
-        cluster_number = cluster_info.index
-        cluster_size = cluster_info.to_list()
-        df = pd.DataFrame({'cluster':cluster_number,
-                          'size':cluster_size})
-        
-        return df
-    
-    def get_cluster_bed(self, index):
-        
-        bed = self.load_bed()
-        clusters = self.load_clusters()
-        
-        c_rows = clusters.loc[clusters["cluster"]==index]["row"].to_numpy()
-        c_bed = bed.iloc[c_rows]
-        
-        return c_bed
-    
-    
-    def get_cluster_sequence_information(self, min_cluster_size=50):
-        
-        os.environ["btools"] = conf.BEDTOOLS_PATH
-        
-        bed = self.load_bed()
-        clusters = self.load_clusters()
-        t = self.get_cluster_sizes(min_cluster_size)
-        uclusters = t["cluster"].unique()
-        uclusters.sort()
-        
-        number_base_pair = []
-    
-        for c in uclusters:
-            c_rows = clusters.loc[clusters["cluster"]==c]["row"].to_numpy()
-            c_bed = bed.iloc[c_rows]
-            
-            # don't need this since idr peaks are 500 bp with no overlap...
-            cov = np.sum(c_bed["chrEnd"].to_numpy() - c_bed["chrStart"].to_numpy() + 1)
-            number_base_pair.append(cov)
-            
-        out_t = pd.DataFrame({'cluster':uclusters,
-                              'bp':number_base_pair})
-        return out_t
     
     def form_cluster_matrix(self, index):
         
         clusters = self.load_clusters()
         rows = clusters.loc[clusters["cluster"]==index]["row"]
-        
+      
         m = self.m[rows,:]
         return m
     
@@ -214,14 +183,85 @@ class peak_clusters:
         seqs = [all_seqs[i] for i in rows]
         
         return seqs
+    
+    def form_cluster_genomics(self, index):
+        clusters = self.load_clusters()
+        rows = clusters.loc[clusters["cluster"]==index]["row"]
+        
+        g = mp.master_peaks().load_genomic_information()
+        g = g.iloc[rows]
+        
+        return g
+        
+    
+    # plot column means
+    def scatterplot(self, index, axis, permute=False):
+        
+         m = self.form_cluster_matrix(index)
+         pdb.set_trace()
+          
+         # permute entries within columns (cell_types)
+         if permute:
+             nperm = m.shape[0]    
+             for i in range(m.shape[1]):
+               m[:,i] = m[np.random.permutation(nperm),i]
+              
+         
+         if axis == 0:
+           vals = np.mean(m, axis=axis)
+           plt.ylim(0, 1)
+           plt.scatter(range(len(vals)), vals)
+           
+           return vals
+         else:
+          vc = pd.DataFrame(np.sum(m, axis=axis)).value_counts()
+          index = [x[0] for x in vc.index]
+          vals = vc.to_list()
+          plt.xlim(0, m.shape[1]+1)
+          plt.ylim(0, 1)
+          plt.scatter(index, vals)
+          
+          return pd.DataFrame({'nopen':index, 'count':vals})
+        
+         
+         
+    
+    def treeplot(self, index):
+        m = self.form_cluster_matrix(index)
+        m_cell_types = self.get_cell_types()
+        nct = len(m_cell_types)
+        
+        g = Yoshida.Yoshida_tree().load_igraph()
+        
+        mm = np.mean(m, axis=0)
+        val_d = {m_cell_types[i]: mm[i] for i in range(nct)}
+        
+        vals = np.array([val_d[ct] for ct in g.vs["name"]])
+        plt.ylim(0, 1)
+        plt.scatter(range(len(vals)), vals)
+        
+        vs = {}
+        vs["bbox"] = (1200, 1000)
+        vs["vertex_size"] = 30*vals
+        vs["vertex_label_size"] = 20
+        vs["vertex_label"] = [str(i)  for i in range(g.vcount())]
+        vs["vertex_label_dist"] = 1.5
+           
+        layout = g.layout_reingold_tilford(mode="all")
+     
+        pl = ig.plot(g, layout=layout, **vs)
+        pl.show()
             
             
     
 class null_peak_clusters:
-    cutoffs_file = conf.DATA_DIR + "peak_clusters/cutoffs.csv"
-    m = mp.master_peaks().load_matrix()
+    peak_cluster_directory = conf.DATA_DIR + "peak_clusters/"
+    cutoffs_file = peak_cluster_directory + "cutoffs.csv"
     
     def __init__(self):
+        self.m = mp.master_peaks().load_matrix()
+        if not os.path.isdir(self.peak_cluster_directory):
+            os.mkdir(self.peak_cluster_directory)           
         if not os.path.isfile(self.cutoffs_file):
             print("creating cutoffs file...")
             self.create_all_cutoffs()
@@ -272,6 +312,7 @@ class null_peak_clusters:
         
         min_rs = 2
         max_rs = nc - 2
+        
         
         rs_vals = np.arange(min_rs, max_rs)
         for rs1 in rs_vals:

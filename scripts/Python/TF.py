@@ -1,58 +1,73 @@
-import peak_clusters as pk
+import configuration as conf
 import os
-from Bio import SeqIO
-from Bio.Seq import Seq
-from Bio.SeqRecord import SeqRecord as SR
 import pdb
-import time
+import pandas as pd
+import numpy as np
+import glmnet_python 
+
+import sklearn.linear_model as sklin
 
 
-class differential_motif:
+
+
+class TF:
     
-    def __init__(self):
-        seq_list = []
-        p = pk.peak_clusters()
+    motif_dir = conf.DATA_DIR + "TF_motifs/"
+    
+    def __init__(self, max_cluster_number=14):
+      m_list = []
+      null_m_list = []
+      for i in range(max_cluster_number+1):
+        file = self.motif_dir + "motif_scores_cluster_" + str(i) + ".csv"
+        nfile = self.motif_dir + "motif_scores_cluster_" + str(i) + "_permuted.csv"
+         
+        m = pd.read_csv(file, sep=",")
+        nm = pd.read_csv(nfile, sep=",")
         
-        for i in range(10):
-            seq_list.append(p.form_cluster_sequences(i))
+        if i == 0:
+            motif_names = m.columns
+        m_list.append(m.to_numpy())
+        null_m_list.append(nm.to_numpy())
         
-        self.seqs = seq_list
-            
+      self.motif_names = motif_names
+      self.m_list = m_list
+      self.null_m_list = null_m_list
+      
+    def get_motif_names(self):
+        return self.motif_names
         
-    def differential(self, index):
-        seqs = self.seqs
-        rseqs = seqs[index]
+    def load_score_matrix(self, index, null=False):
+      if null:
+          m = self.null_m_list[index]
+      else:
+          m = self.m_list[index]
+          
+      return m
+  
+    def find_within_cluster_enriched(self, index1, index2):
+        m = self.load_score_matrix(index1, null=False)
+        nm = self.load_score_matrix(index2, null=False)
+        motif_names = self.get_motif_names()
         
-        cseqs = []
-        for i in range(len(seqs)):
-            if not i == index:
-                cseqs = cseqs + seqs[i]
-                
-        rSR = [SR(Seq(rseqs[i]), id="response_str" + str(i), description="") 
-               for i in range(len(rseqs))]
-        cSR = [SR(Seq(cseqs[i]), id="control_str" + str(i), description="") 
-               for i in range(len(cseqs))]
+        y = np.concatenate((np.repeat(1, m.shape[0]), 
+                         np.repeat(0, nm.shape[0])))
+        X = np.concatenate((m, nm), axis=0)
         
-        SeqIO.write(rSR, "response.fasta", "fasta")
-        SeqIO.write(cSR, "control.fasta", "fasta")
+        #X = X[0:100,1:50]
+        #y = np.concatenate((np.repeat(1, 50), 
+         #                np.repeat(0, 50)))*1.0
+      
+        f =  sklin.LogisticRegressionCV(cv=5, 
+                                        random_state=0,
+                                        max_iter=1000,
+                                        penalty="l1")
+        f.fit(X, y)
         
-    def meme_ame(self, motif_file,
-                 ame_dir="/Users/sr286/meme/"):
-        
-        start = time.time()
-
-        bpath = ame_dir + "bin"
-        lpath = ame_dir + "libexec/meme-5.1.0"
-        path = os.environ["PATH"]
+        pdb.set_trace()
        
-        os.environ["PATH"] = bpath + ":" + lpath + ":" + path
-        os.environ["mf"] = motif_file
-        os.system("ame --control control.fasta response.fasta $mf")
         
-        end = time.time()
-        print(end - start)
-        # MEME-AME is too slow!  Let's use homer!
-
- 
         
-       
+        
+        
+        
+        

@@ -65,6 +65,7 @@ class mm10_biomart:
         b = pd.DataFrame({'chr':d["chr"],
                           'chrStart':d["TSS"] - padding,
                           'chrEnd':d["TSS"] + padding})
+        b = b.sort_values(["chr", "chrStart"])
         b.to_csv(outfile, sep="\t", index=False, header=None)
 
 class mm10_genome:

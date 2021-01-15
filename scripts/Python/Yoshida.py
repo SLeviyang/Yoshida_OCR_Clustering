@@ -1,7 +1,4 @@
 import configuration as conf
-import utilities
-import tree_cluster as tc
-import peak_clusters as pk
 
 import pandas as pd
 import os
