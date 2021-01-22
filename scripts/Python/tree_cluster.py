@@ -89,14 +89,17 @@ class tree_cluster:
         
     # pick random cut vertices and include all outgoing edges
     # as the cut edges
-    def initialize_components(self):
-  
-        cut_vertices = np.random.choice(self.info['internal'], 
+    def initialize_components(self,initial_cutvertices=[]):
+        g = self.g
+        if len(initial_cutvertices)>0:
+            cut_vertices = initial_cutvertices
+            cut_edges = [[(u,v) for u in g.predecessors(v)] for v in cut_vertices]
+        else:    
+            cut_vertices = np.random.choice(self.info['internal'], 
                                                 self.K-1, 
                                                 replace=False)
-        g = self.g
-        # all children will form cut edges
-        cut_edges = [[(v, u) for u in g.neighbors(v, mode=ig.OUT)] for v in cut_vertices]
+            # all children will form cut edges
+            cut_edges = [[(v, u) for u in g.neighbors(v, mode=ig.OUT)] for v in cut_vertices]     
         self.cut_edges = cut_edges
         self.update_components()
         
@@ -199,7 +202,6 @@ class tree_cluster:
     
         current_loss = self.compute_residual2()
         
-        nv = self.g.vcount()
         cut_vertices = self.get_cut_vertices()
         children = self.info['children']
         
@@ -265,7 +267,7 @@ class tree_cluster:
         
         return best_cut_edges
     
-    def treeplot(self, m_index=None):
+    def treeplot(self,savepath='',vertex_label=False, m_index=None):
         a = self.assignments
         g = self.g
         vs = {}
@@ -280,13 +282,19 @@ class tree_cluster:
         else:
             vs["vertex_size"] = 30*np.mean(self.m[m_index], 0) + 1
         vs["vertex_label_size"] = 20
-        vs["vertex_label"] = [str(i)  for i in range(g.vcount())]
+        if vertex_label:
+            vs["vertex_label"] = g.vs['name']
+        else:
+            vs["vertex_label"] = [str(i)  for i in range(g.vcount())]
         vs["vertex_label_dist"] = 1.5
            
-        layout = g.layout_reingold_tilford(mode="all")
+        layout = g.layout_reingold_tilford()
      
-        pl = ig.plot(g, layout=layout, **vs)
-        pl.show()
+        if savepath == '':
+            pl = ig.plot(g, layout=layout, **vs)
+            pl.show()
+        else:
+            ig.plot(g,savepath,layout=layout, **vs)
         
     def boxplot(self, num_m_index=6):
         a = self.assignments
@@ -336,8 +344,3 @@ class tree_cluster:
         #plt.set_title("Clusters")
         #fig.tight_layout()
         plt.show()
-
-                
-        
-        
-        
