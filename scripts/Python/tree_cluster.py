@@ -89,11 +89,10 @@ class tree_cluster:
         
     # pick random cut vertices and include all outgoing edges
     # as the cut edges
-    def initialize_components(self,initial_cutvertices=[]):
+    def initialize_components(self,initial_cutedges = []):
         g = self.g
-        if len(initial_cutvertices)>0:
-            cut_vertices = initial_cutvertices
-            cut_edges = [[(u,v) for u in g.predecessors(v)] for v in cut_vertices]
+        if(len(initial_cutedges)>0):
+            cut_edges = initial_cutedges
         else:    
             cut_vertices = np.random.choice(self.info['internal'], 
                                                 self.K-1, 
