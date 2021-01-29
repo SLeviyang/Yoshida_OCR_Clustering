@@ -70,7 +70,7 @@ create_motif_score_matrices <- function(max_cluster_number,
 
   pc <- construct.peak_clusters()
   
-  lapply(0:max_cluster_number, function(cluster_number) {
+  mclapply(0:max_cluster_number, function(cluster_number) {
     motif_score_file <- paste(raw_motifCluster_dir, "motif_scores_cluster_", 
                               cluster_number, ".csv", sep="")
     rmotif_score_file <- paste(raw_motifCluster_dir, "motif_scores_cluster_", 
@@ -103,16 +103,15 @@ create_motif_score_matrices <- function(max_cluster_number,
       write.csv(m, motif_score_file, row.names = F)
     }
     if (!file.exists(rmotif_score_file)) {
-      rm <-  HOMERscoreMatrix(rseqs, motifs, just_plus_strand = F)
-      write.csv(rm, rmotif_score_file, row.names = F,
-                message=paste("null cluster", cluster_number, sep=" "))
+      rm <-  HOMERscoreMatrix(rseqs, motifs, just_plus_strand = F,
+                          message=paste("null cluster", cluster_number, sep=" "))
+      write.csv(rm, rmotif_score_file, row.names = F)
     }
     if (!file.exists(sequence_score_file)) {
       write.csv(data.frame(sequence=seqs, stringsAsFactors = F), 
                 sequence_score_file, row.names = F)
     }
-
-  })
+  }, mc.cores = 3)
   
 }
 

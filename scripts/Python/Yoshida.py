@@ -82,6 +82,7 @@ class Yoshida_data:
 class Yoshida_tree:
     
     edgelist_file = conf.INPUT_DATA + "Yoshida_edge_list.csv"
+    root = "LTHSC.34-.BM"
    
     def load_igraph(self, just_root=True):
         e = self.load_edgelist()
@@ -89,14 +90,16 @@ class Yoshida_tree:
         g = ig.Graph.Read_Ncol("temp_Yoshida_graph.csv", directed=True)
         
         if just_root:
-            root = "LTHSC.34-.BM"
-            descendants = g.neighborhood(root, 
+            descendants = g.neighborhood(self.root, 
                                          order=1000, mode="out")
             g = g.induced_subgraph(descendants)
                 
         os.remove("temp_Yoshida_graph.csv")
         
         return g
+    
+    def get_root(self):
+        return self.root
     
     def load_edgelist(self):
         e = pd.read_csv(self.edgelist_file, sep=",")
