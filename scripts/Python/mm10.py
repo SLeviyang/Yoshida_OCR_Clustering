@@ -58,13 +58,17 @@ class mm10_biomart:
         return d
     
     def to_bed(self, outfile, padding=0,
-               n=None):
+               additional_columns=["gene_name"]):
         d = self.load()
-        if n is not None:
-            d = d.iloc[0:n]
+        
         b = pd.DataFrame({'chr':d["chr"],
                           'chrStart':d["TSS"] - padding,
                           'chrEnd':d["TSS"] + padding})
+    
+        if additional_columns is not None:
+            for ac in additional_columns:
+              b.insert(b.shape[1], ac, d[ac])
+        
         b = b.sort_values(["chr", "chrStart"])
         b.to_csv(outfile, sep="\t", index=False, header=None)
 

@@ -1,5 +1,6 @@
 import configuration as conf
 import Yoshida
+import utilities
 
 import pandas as pd
 import os
@@ -8,12 +9,18 @@ import pdb
 import numpy as np
 import mm10 
 
+from Bio.SeqUtils import GC
+
 # Classes to access the master idr matrix
 class master_peaks:
     
   master_peaks_dir = conf.DATA_DIR + "master_peaks/"
+  
+  # input files (downloaded from S3)
   table_file = conf.INPUT_DATA + "master_peak_table.bed"
   input_matrix_file = conf.INPUT_DATA + "master_peak_matrix.txt"
+  
+  # output files
   matrix_file = master_peaks_dir + "master_peak_matrix.csv"
   sequence_file = master_peaks_dir + "master_peak_sequences.txt"
   genomic_file = master_peaks_dir + "master_peak_genomic_info.csv"
@@ -70,6 +77,7 @@ class master_peaks:
       return seqs 
   
   def create_genomic_information(self):
+      seqs = self.load_sequences()
       TSSfile = "temp_TSS" + str(np.round(1E10 * np.random.uniform())) + ".bed"
       outfile = "temp_out" + str(np.round(1E10 * np.random.uniform())) + ".bed"
       
@@ -81,16 +89,21 @@ class master_peaks:
       os.environ["of"] = outfile
       
       os.system('$btools closest -a $peakbed -b $tf -t first -d > $of')
-      tb = pd.read_csv(outfile, sep="\t", header=None,
+      bedtools_tb = pd.read_csv(outfile, sep="\t", header=None,
                        names=["chr", "chrStart", "chrEnd",
-                              "score", "x", "y", "z", "dTSS"])
+                              "score", "x", "y", "z", "gene", "dTSS"])
       
       # debug check
       peak_tb = pd.read_csv(self.table_file, sep="\t", header=None)
-      if not len(peak_tb) == len(tb):
+      if not len(peak_tb) == len(bedtools_tb):
           sys.exit("problem with bedtools closest script!")
+      bedtools_tb = bedtools_tb[["dTSS", "gene"]]
           
-      tb = tb["dTSS"]
+      # nuc freqs
+      nucs = ["A", "C", "G", "T", "GC", "CG"]
+      nuc_tb = utilities.nucleotide_frequency_table(seqs, nucs=nucs)
+    
+      tb = pd.concat([bedtools_tb, nuc_tb], axis=1)
       tb.to_csv(self.genomic_file, sep=",", index=False)
       
       os.remove(TSSfile)
@@ -171,6 +184,8 @@ class master_peaks:
       d = pd.read_csv(self.table_file, sep="\t", header=None,
                       names=["chr", "chrStart", "chrEnd", "score"])
       return d
+  
+ 
     
     
 
