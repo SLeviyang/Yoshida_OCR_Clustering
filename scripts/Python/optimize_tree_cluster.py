@@ -15,12 +15,9 @@ import peak_clusters
 import master_peaks as mp
 import configuration as conf
 
-
-
 class initial_clusters:
     
     col_cluster_directory = conf.DATA_DIR + 'col_clusters/'
-    col_cluster_file = col_cluster_directory+'initial.csv'
     
     def __init__(self, k, g, peak_cluster, 
                  num_row_clusters=20, 
@@ -28,6 +25,8 @@ class initial_clusters:
         
         if not os.path.isdir(self.col_cluster_directory):
             os.mkdir(self.col_cluster_directory)
+            
+        self.col_cluster_file = self.col_cluster_directory + str(k) + '_initial.csv'
             
         self.nCPU = nCPU
         self.num_clusters = k
@@ -41,35 +40,18 @@ class initial_clusters:
             sys.exit("tree vertex names and peak cluster cell types must match")
         match_ind = utilities.match(g_names, pc_names)
         m_list = []
-        cluster_list = []
         for i in range(num_row_clusters+1):
             m = peak_cluster.form_cluster_matrix(i)[:,match_ind]
-            m_list.append(m) 
-            cluster_list.append(np.repeat(i, len(m)))
+            m_list.append(m)
+        self.m_list = m_list
         
         self.tree_cluster = tree_cluster(self.g, m_list, self.num_clusters)
-        self.rootnode = Yoshida.Yoshida_tree().get_root()
+        self.rootnode = 0
                              
         # the following are only used in create_cut_combinations
-        nxG = nx.from_edgelist(self.g.get_edgelist(),nx.DiGraph())
-        self.nxG_map = dict(zip(nxG.nodes(),self.g.vs['name']))
-        self.nxG = nx.relabel_nodes(nxG,self.nxG_map)
-        
-        # create combined data matrix with cluster/row columns
-        M = np.concatenate(m_list, axis=0)
-        clusters = np.concatenate(cluster_list)
-        # no idea why all this stuff is needed!
-        mwa = pd.DataFrame(M, columns=g_names)
-        mwa.insert(mwa.shape[1], "cluster", clusters)
-        mwa.insert(mwa.shape[1], "row", np.arange(len(mwa)))
-        mwa.set_index('row',inplace=True)
-        mwa.index = mwa.index.rename('index')
-        self.mwa = mwa
+        self.nxG = nx.from_edgelist(self.g.get_edgelist(),nx.DiGraph())
         
         self.qualified_cut_vertices = self.identify_qualified_cut_vertices()
-        
-        
-   
         
     #  vertices that are good candidates for cuts
     def identify_qualified_cut_vertices(self):
@@ -98,6 +80,7 @@ class initial_clusters:
         treecluster.initialize_components()
         return {'assignments':treecluster.get_assignments(),
                 'residual':treecluster.compute_residual2(),
+                'cut_edges':treecluster.cut_edges,
                 'generated':"random"}
              
     #  form combinations of k vertices from the qualified vertices
@@ -107,33 +90,27 @@ class initial_clusters:
         cut_vertices.remove(self.rootnode)
         
         combinations = [list(combination) for combination in itertools.combinations(cut_vertices,self.num_clusters-1)]
-        combinations = [[self.rootnode] + comb for comb in combinations]
+        cutedge_combinations = [[[(u,v)] for v in comb for u in self.g.predecessors(v)] for comb in combinations]
         
-        return combinations
+        return cutedge_combinations
     
-    def create_cut_combination_clusters(self, combinations):
+    def create_cut_combination_clusters(self, cutedge_combs):
   
-        # debug
-        mwa = self.mwa.copy()
+        m_list = self.m_list.copy()
         p = multiprocessing.Pool(processes=self.nCPU)
-        packed_results = p.starmap(clusterScores,
-                                  zip(combinations,
-                                      itertools.repeat(self.nxG),
-                                      itertools.repeat(mwa)))   
+        packed_results = p.starmap(computeCluster,
+                                  zip(cutedge_combs,
+                                      itertools.repeat(self.g),
+                                      itertools.repeat(m_list),
+                                      itertools.repeat(self.num_clusters)))   
         
         # need to unpack results...
-        vertex_names = self.g.vs["name"]
-        assignments = np.repeat(-1, len(self.g.vs))
         results = []
+        i = 0
         for pr in packed_results:       
          
           residual2 = pr[0]
-          clusters = pr[1]
-          assignments[:] = -1
- 
-          for i in range(len(clusters)):
-            elements = clusters[i]
-            assignments[utilities.match(elements, vertex_names)] = i
+          assignments = pr[1]
             
           # debug
           if np.any(assignments == -1):
@@ -141,7 +118,9 @@ class initial_clusters:
              
           results.append({'assignments':assignments,
                           'residual':residual2,
+                          'cut_edges':cutedge_combs[i],
                           'generated':"cut"})
+          i+=1
           
         return results
     
@@ -151,9 +130,9 @@ class initial_clusters:
         for i in range(nrand):
           self.results.append(self.create_random_clusters())
          
-        combs = self.create_cut_combinations()
+        cutedge_combs = self.create_cut_combinations()
         self.results = self.results \
-                       + self.create_cut_combination_clusters(combs)
+                       + self.create_cut_combination_clusters(cutedge_combs)
        
         
       
@@ -166,10 +145,12 @@ class initial_clusters:
     def save_results(self):
         assign_m = np.array([r["assignments"] for r in self.results])
         res = [r["residual"] for r in self.results]
+        cut = [r["cut_edges"] for r in self.results]
         gen = [r["generated"] for r in self.results]
         
         tb = pd.DataFrame(assign_m,
                           columns=self.g.vs["name"])
+        tb.insert(tb.shape[1], "cut_edges", cut)
         tb.insert(tb.shape[1], "residual", res)
         tb.insert(tb.shape[1], "generated", gen)
         
@@ -179,37 +160,7 @@ class initial_clusters:
 
 ######################################################
 # computational methods
-def optimizeColClusters(data,col_clusters):
- 
-    M = data.copy()
-    for col_cluster in col_clusters:
-        col_cluster = list(col_cluster)
-        cluster_mean = pd.merge(data.reset_index()[['index','cluster']],
-                                pd.DataFrame(data[col_cluster + ['cluster']].groupby('cluster').mean().mean(axis=1)),
-                                left_on='cluster',right_on='cluster',how='left')
-        cluster_mean.set_index('index',inplace=True)
-        for col in col_cluster:
-            M[col] = cluster_mean[0]
-    return np.linalg.norm(M.drop('cluster',axis=1).sub(data.drop('cluster',axis=1)))**2 
-
-def createColClusters(G,cut_vertices):
-    def descendTree(vertex,G,other_cutvertices):
-        if vertex in other_cutvertices:
-            return []
-        toreturn = [vertex]
-        if len(G.out_edges(vertex))==0:
-            return toreturn
-        children = list(G.successors(vertex))
-        for child in children:
-            toreturn += descendTree(child,G,other_cutvertices)
-        return toreturn
-    col_clusters = []
-    for vertex in cut_vertices:
-        other_cutvertices = cut_vertices.copy()
-        other_cutvertices.remove(vertex)
-        col_clusters.append(descendTree(vertex,G,other_cutvertices))
-    return col_clusters
-
-def clusterScores(cut_vertices,G,m):
-    col_clusters = createColClusters(G, cut_vertices) 
-    return optimizeColClusters(m, col_clusters), col_clusters
+def computeCluster(cut_edges,g,m_list,num_clusters):
+    tc = tree_cluster(g, m_list, num_clusters)
+    tc.initialize_components(cut_edges)
+    return tc.compute_residual2, tc.assignments
