@@ -1,5 +1,6 @@
 import configuration as conf
 import peak_clusters as pc
+import gene_clusters as gc
 import master_peaks as mp
 import utilities
 import Yoshida
@@ -10,156 +11,135 @@ import sys
 import pdb
 import pandas as pd
 import numpy as np
+import seaborn as sns
+import sklearn.preprocessing as skpre
+import scipy.stats as stats
+import matplotlib.pyplot as plt
 
-class gene_OCR:
+
+# for each gene determine the number of OCR within each 
+# peak_cluster split by enhancer and promoter
+class genes_and_peaks:
     
-    gene_OCR_directory = conf.DATA_DIR + "genes/"
+    gene_directory = conf.DATA_DIR + "gene_and_peaks/"
+    gene_file = gene_directory + "gene_and_peaks_table.csv"
     
-    gene_OCR_TSS_file = conf.DATA_DIR + "genes/gene_TSS_OCRs.csv"
-    # distal enhancers (terminology from Yoshida)
-    gene_OCR_DE_file = conf.DATA_DIR + "genes/gene_DE_OCRs.csv"
+    def __init__(self, peak_FDR=1E-3, gene_FDR=1E-6):
+        self.peak_FDR = peak_FDR
+        self.gene_FDR = gene_FDR
     
-    def __init__(self):
-        self.master_m = mp.master_peaks().load_matrix()
-        self.master_g = mp.master_peaks().load_genomic_information()
-        self.clusters = pc.peak_clusters().load_clusters()
-        
-        if not os.path.isdir(self.gene_OCR_directory):
-            os.mkdir(self.gene_OCR_directory)
-        if not os.path.isfile(self.gene_OCR_TSS_file):
-            tb = self.create_gene_table(0, 1000)
-            tb.to_csv(self.gene_OCR_TSS_file, sep=",", index=False)
-        if not os.path.isfile(self.gene_OCR_DE_file):
-            tb = self.create_gene_table(3000, 1E5)
-            tb.to_csv(self.gene_OCR_DE_file, sep=",", index=False)
-        
-        
-    def create_gene_table(self, 
-                          dTSS_start, dTSS_end):
-        
-        max_cluster_number = np.max(self.clusters["cluster"])
-        mast = mp.master_peaks()
-        m = mast.load_matrix()
-        g = mast.load_genomic_information()
-        nloci = m.shape[0]
-        
-        p = pc.peak_clusters().load_clusters()
-        p = p.loc[p["cluster"] <= max_cluster_number]
-        
-        # cluster of each peak, -1 means no clusters
-        assignments = np.repeat(-1, nloci)
-        pg = p.groupby("cluster")
-        for cluster,pgc in pg:
-            assignments[pgc["row"]] = cluster
-        g.insert(len(g.columns), "cluster", assignments)
-        
-        all_genes = sorted(g["gene"].unique().tolist())
-        
-        g = g[(g["dTSS"] >= dTSS_start) & (g["dTSS"] <= dTSS_end)]
-        cluster_counts = {'gene':all_genes}
-        gg = g.groupby("cluster")
-        for cluster,ggc in gg:
-            if cluster == -1:
-                cluster_name = "cNone"
-            else:
-                cluster_name = "c" + str(cluster)
-            counts = np.repeat(0, len(all_genes))
-            sc = ggc["gene"].value_counts()
-            ind = utilities.match(sc.index.tolist(), all_genes)
-            # debug
-            if -1 in ind:
-                sys.exit("unidentified gene!")
-            counts[ind] = sc.tolist()
-            cluster_counts[cluster_name] = counts
-         
-        return pd.DataFrame(cluster_counts)
-    
-    def get_gene_loci(self, gene):
-        g = self.master_g
-        g = g[g["gene"] == gene]
-        if len(g) == 0:
-            return None
-        
-        clusters_ind = utilities.match(g.index, self.clusters["row"])
-        gene_clusters = []
-        for ind in clusters_ind:
-            if ind == -1:
-                gene_clusters.append(-1)
-            else:
-                gene_clusters.append(self.clusters.at[ind,"cluster"])
-        
-     
-        cm = np.sum(self.master_m[g.index,:], 1)
-        
-        tb = pd.DataFrame({'index':range(len(g.index)),
-                          'locus':g.index,
-                          'dTSS':g["dTSS"],
-                          'nOCR':cm,
-                          'cluster':gene_clusters,
-                          'gene':g["gene"]})
-        
-        return tb
-        
-    def load_gene_table(self):
-        tb_TSS = pd.read_csv(self.gene_OCR_TSS_file, sep=",")
-        tb_TSS.insert(1, "type", "TSS")
-        
-        tb_DE = pd.read_csv(self.gene_OCR_DE_file, sep=",")
-        tb_DE.insert(1, "type", "DE")
-        
-        return tb_TSS.append(tb_DE)
-    
-    # show locus state (0/1) across all cell types
-    # index gives the number of the locus within the gene, not
-    # the locus value (row) itself
-    def plottree(self, gene, index):
-      g = Yoshida.Yoshida_tree().load_igraph()
-      y_ct = g.vs["name"]
-      ct = mp.master_peaks().get_cell_types()
-      
-      if not set(y_ct) == set(ct):
-            sys.exit("tree and matrix cell types do not match!")
-      map_ct = utilities.match(y_ct, ct)
-     
-      locus = self.get_gene_loci(gene).index[index]
-      OCR = self.master_m[locus,map_ct]
-      
-      vs = {}
-      vs["bbox"] = (1200, 1000)
-      vs["vertex_size"] = 25*OCR + 5
-      vs["vertex_label_size"] = 20
-      vs["vertex_label"] = [str(i)  for i in range(len(y_ct))]
-      vs["vertex_label_dist"] = 1.5
-           
-      layout = g.layout_reingold_tilford(mode="all")
-     
-      pl = ig.plot(g, layout=layout, **vs)
-      pl.show()
-      
-      
-      
-    
-    def test(self, n1, randomize=False):
-        master = mp.master_peaks()
-        m = master.load_matrix()
-        m = m[np.sum(m,1)==n1,:]
-        nc = m.shape[1]
-        
-        if randomize:
-            for i in range(len(m)):
-                m[i,:] = m[i,np.random.permutation(nc)]
-        
-        ct = master.get_cell_types()
-        joint = []
-        for i in range(len(m)):
-            ind = np.where(m[i,:]==1)[0]
-            ct_ind = [ct[j] for j in ind]
-         
-            joint.append("___".join(ct_ind))
+        if not os.path.isdir(self.gene_directory):
+            os.mkdir(self.gene_directory)
+        if not os.path.isfile(self.gene_file):
+            self.create_gene_table()
             
-        g = pd.Series(joint)
-        return g.value_counts().sort_values(ascending=False)
-      
-   
+        self.table = pd.read_csv(self.gene_file, sep=",")
         
-  
+    def create_gene_table(self):
+        
+        # form locus, gene, TSS table
+        genomic = mp.master_peaks().load_genomic_information()
+        genomic.insert(0, "locus", genomic.index)
+        genomic = genomic[["locus", "gene", "dTSS"]]
+        
+        gclust = gc.gene_clusters(self.gene_FDR).load_clusters(True)
+        gclust = gclust.rename(columns={'cluster':'gene_cluster'})
+        gclust = gclust.drop("row", axis=1)
+        
+        pclust = pc.peak_clusters(self.peak_FDR).load_clusters()
+        pclust = pclust.rename(columns={'cluster':'peak_cluster',
+                                        'row':'locus'})
+     
+        genomic = genomic.merge(gclust, on="gene", how="left")
+        no_gene_cluster = np.isnan(genomic["gene_cluster"])
+        genomic.loc[no_gene_cluster,'gene_cluster'] = -1
+        genomic["gene_cluster"] = genomic["gene_cluster"].astype('int32')
+        
+        genomic = genomic.merge(pclust, on="locus", how="left")
+        no_peak_cluster = np.isnan(genomic["peak_cluster"])
+        genomic.loc[no_peak_cluster,'peak_cluster'] = -1
+        genomic["peak_cluster"] = genomic["peak_cluster"].astype('int32')
+        
+        genomic.to_csv(self.gene_file, sep=",", index=False)
+        
+    def get_table(self):
+        return self.table
+    
+    def form_cluster_table(self, 
+                           start_dTSS=0,
+                           end_dTSS=1E10,
+                           sum_across_peaks=True,
+                           max_gene_cluster=14,
+                           max_peak_cluster=20,
+                           sig=.05,
+                           merge_peak_clusters_within_genes=False):
+        tb = self.get_table()
+        tb = tb[(tb["dTSS"] >= start_dTSS) &
+                (tb["dTSS"] <= end_dTSS)]
+        tb = tb[(tb["gene_cluster"] <= max_gene_cluster) &
+                (tb["peak_cluster"] <= max_peak_cluster)]
+        
+        tb = tb[tb["peak_cluster"] >= 0]
+        tb = tb[tb["gene_cluster"] >= 0]
+        
+        print(["size before merge", tb.shape])
+        if merge_peak_clusters_within_genes:
+            tb.drop_duplicates(["gene", "peak_cluster"], inplace=True)
+        print(["size after merge", tb.shape])
+        
+        ng_clusters = max_gene_cluster + 1
+        np_clusters = max_peak_cluster + 1
+        
+        ngenes = np.zeros(ng_clusters)
+        npeaks = np.zeros(np_clusters)
+        
+        for i in range(ng_clusters):
+            genes_in_cluster = tb[tb["gene_cluster"]==i]["gene"].unique()
+            ngenes[i] = genes_in_cluster.shape[0]
+        for i in range(np_clusters):
+            npeaks[i] = len(tb[tb["peak_cluster"]==i])
+            
+        total_ngenes = np.sum(ngenes)
+        total_npeaks = np.sum(npeaks)
+               
+        # clusters range from -1 to maxs
+        m = np.ones([max_gene_cluster+1, max_peak_cluster+1])
+        counts = np.zeros([max_gene_cluster+1, max_peak_cluster+1])
+        
+        for names, gm in tb.groupby(["gene_cluster", "peak_cluster"]):
+            gene_ind = names[0] 
+            peak_ind = names[1] 
+            
+            # number of peaks in cell
+            # number of total peaks
+            if sum_across_peaks:
+              successes = len(gm)
+              trials = npeaks[peak_ind]
+              p = ngenes[gene_ind]/total_ngenes
+            else:
+              successes = len(gm)
+              trials = tb[tb["gene_cluster"]==gene_ind].shape[0]
+              p = npeaks[peak_ind]/total_npeaks
+            
+            pval = stats.binom_test(successes, 
+                                    n=trials, 
+                                    p=p, 
+                                    alternative="greater")
+            
+            m[gene_ind, peak_ind] = pval
+            counts[gene_ind, peak_ind] = successes
+           
+        
+        if sum_across_peaks:
+            cutoff = sig/m.shape[0]
+        else:
+            cutoff = sig/m.shape[1]
+        m_single = np.zeros([max_gene_cluster+1, max_peak_cluster+1])
+        m_single[m < cutoff] = 1
+        
+        sns.heatmap(m_single, 
+                    annot=np.round(-10*np.log10(1E-9 + m)))
+        #sns.heatmap(counts, annot=True)
+    
+
+ 

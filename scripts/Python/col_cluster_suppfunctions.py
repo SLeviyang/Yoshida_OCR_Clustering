@@ -1,10 +1,14 @@
+import pandas as pd
+import numpy as np
+
 def optimizeColClusters(data,col_clusters):
-    import pandas as pd
-    import numpy as np
+ 
     M = data.copy()
     for col_cluster in col_clusters:
         col_cluster = list(col_cluster)
-        cluster_mean = pd.merge(data.reset_index()[['index','cluster']],pd.DataFrame(data[col_cluster + ['cluster']].groupby('cluster').mean().mean(axis=1)),left_on='cluster',right_on='cluster',how='left')
+        cluster_mean = pd.merge(data.reset_index()[['index','cluster']],
+                                pd.DataFrame(data[col_cluster + ['cluster']].groupby('cluster').mean().mean(axis=1)),
+                                left_on='cluster',right_on='cluster',how='left')
         cluster_mean.set_index('index',inplace=True)
         for col in col_cluster:
             M[col] = cluster_mean[0]

@@ -42,8 +42,9 @@ optimal_column_clusters class (inherits column_clusters)
          optimal assignments (map), optimal cut edges, optimal residual.
          
 Note:
-    Both initial_column_clusters and optimal_column_clusters have functions that use multiprocessing. Multiprocessing is demanding 
-    on the computer while the functions are being called but greatly improve computation speed.
+    Both initial_column_clusters and optimal_column_clusters have functions 
+    that use multiprocessing.  Multiprocessing is demanding on the computer 
+    while the functions are being called but greatly improve computation speed.
     
 -------------------------------------------------------------------------------------------------------     
         
@@ -66,19 +67,28 @@ import ast
 from pandarallel import pandarallel
 from col_cluster_suppfunctions import clusterScores
 from tree_cluster import tree_cluster
+import pdb
+
+
+
 
 class column_clusters:
     col_cluster_directory = conf.DATA_DIR + 'col_clusters/'
     
-    def __init__(self,k,min_size,num_rand):
+    def __init__(self,k,FDR=1E-3,min_size=100,num_rand=20):
         self.num_clusters = k
+        
         self.g = Yoshida.Yoshida_tree().load_igraph()
-        self.rootnode = self.g.vs['name'][0]
-        self.clusters = peak_clusters.peak_clusters().clusters
+        self.rootnode = Yoshida.Yoshida_tree().get_root()
+        self.clusters = peak_clusters.peak_clusters(FDR).load_clusters()
+        
         self.num_rand = num_rand
         self.min_size = min_size
         master_peaks = mp.master_peaks()
-        self.m = pd.DataFrame(master_peaks.load_matrix().astype('float'),columns=master_peaks.get_cell_types()).loc[self.clusters.groupby('cluster').filter(lambda x: len(x) > min_size)['row']]
+        self.m = pd.DataFrame(master_peaks.load_matrix().astype('float'),
+                              columns=master_peaks.get_cell_types())
+        self.m = self.m.loc[self.clusters.groupby('cluster').filter(lambda x: len(x) > min_size)['row']]
+        
         if not os.path.isdir(self.col_cluster_directory):
             os.mkdir(self.col_cluster_directory)
 
@@ -90,93 +100,19 @@ class column_clusters:
             M.append(m_wclusterassign[m_wclusterassign['cluster']==cluster].drop('cluster',axis=1).values)
         return M
             
-class initial_column_clusters(column_clusters):
-    
-    def __init__(self,k,min_size,num_rand):
-        column_clusters.__init__(self,k,min_size,num_rand)
-        self.col_cluster_directory = self.col_cluster_directory+'initial_clusters/'
-        self.col_cluster_file = self.col_cluster_directory+str(self.num_clusters) + '_initialcolclusters.xlsx'
-        nxG = nx.from_edgelist(self.g.get_edgelist(),nx.DiGraph())
-        self.nxG_map = dict(zip(nxG.nodes(),self.g.vs['name']))
-        self.nxG = nx.relabel_nodes(nxG,self.nxG_map)
-        self.results = pd.DataFrame(data = None, columns = ['initial_cluster_assign','initial_cut_edges','initial_cluster_residual','generated'])
-        if not os.path.isdir(self.col_cluster_directory):
-            os.mkdir(self.col_cluster_directory)
 
-    def add_rand(self):
-        treecluster = tree_cluster(self.g,self.create_rowclusterM(),self.num_clusters)
-        for n in range(self.num_rand):
-            treecluster.initialize_components()
-            newrow = pd.DataFrame([treecluster.compute_residual2()],columns=['initial_cluster_residual'])
-            newrow['initial_cluster_assign'] = [dict(zip(treecluster.g.vs['name'],treecluster.get_assignments()))]
-            newrow['initial_cut_edges'] = [treecluster.cut_edges]
-            newrow['generated'] = 'random'
-            self.results = self.results.append(newrow[['initial_cluster_assign','initial_cut_edges','initial_cluster_residual','generated']])
-    
-    def load_column_clusters(self,overwrite=False):
-        self.get_qualified_cut_vertices()
-        if (os.path.isfile(self.col_cluster_file)) & (overwrite==False):
-            df = pd.read_excel(self.col_cluster_file)
-            df['initial_cluster_assign'] = [ast.literal_eval(val) for val in df['initial_cluster_assign'].values]
-            df['initial_cut_edges'] = [ast.literal_eval(val) for val in df['initial_cut_edges'].values]
-            self.results = df
-        else:
-            self.score_cut_combinations()
-            self.add_rand()
-            self.save_results()
-            
-    def get_qualified_cut_vertices(self):
-        def criteria(G,node):
-            num_direct_inedges = len(G.in_edges(node))
-            num_indirect_outedges = len(nx.nodes(nx.dfs_tree(G, node)))-1
-            if num_direct_inedges==0:
-                return True
-            parent = list(G.predecessors(node))[0]
-            num_direct_outedges_parent = len(G.out_edges(parent))
-            if (num_indirect_outedges>1) & (num_direct_outedges_parent > 1):
-                return True
-            return False
-        G = self.nxG
-        qualified_cut_vertices = []
-        for node in G.nodes():
-            if criteria(G,node):
-                qualified_cut_vertices.append(node)
-        self.qualified_cut_vertices = qualified_cut_vertices
-        
-    def score_cut_combinations(self,save=False):
-        def convertToDict(clustering):
-            returndict = {}
-            for cluster in range(len(clustering)):
-                for node in clustering[cluster]:
-                    returndict.update({node:cluster})
-            return returndict
-        cut_vertices = self.qualified_cut_vertices.copy()
-        cut_vertices.remove(self.rootnode)
-        inv_nxG_map = {v: k for k, v in self.nxG_map.items()}
-        combinations = [list(combination) for combination in itertools.combinations(cut_vertices,self.num_clusters-1)]
-        cut_edges = [[[(u,inv_nxG_map.get(v))] for v in comb for u in self.g.predecessors(inv_nxG_map.get(v))] for comb in combinations]
-        combinations = [[self.rootnode] + comb for comb in combinations]
-        m_wclusterassign = pd.merge(self.m,self.clusters,left_index=True,right_on='row',how='left')
-        m_wclusterassign.set_index('row',inplace=True)
-        m_wclusterassign.index = m_wclusterassign.index.rename('index')
-        p = multiprocessing.Pool(processes=multiprocessing.cpu_count()-1)
-        results = p.starmap(clusterScores,zip(combinations,itertools.repeat(self.nxG),itertools.repeat(m_wclusterassign)))   
-        results = pd.DataFrame(results, columns = ['initial_cluster_residual', 'initial_cluster_assign'])
-        results['generated'] = 'selected'
-        results['initial_cluster_assign'] = results['initial_cluster_assign'].map(lambda x: convertToDict(x))
-        results['initial_cut_edges'] = cut_edges
-        self.results = self.results.append(results[['initial_cluster_residual','initial_cut_edges','initial_cluster_assign','generated']],ignore_index=True)
-        
-    def save_results(self):
-        self.results.to_excel(self.col_cluster_file,index=False)
         
 class optimal_column_clusters(column_clusters):
     
-    def __init__(self,k,min_size,num_rand, n = 100, num_iters = 1):
-        column_clusters.__init__(self,k,min_size,num_rand)
+    def __init__(self,k, FDR=1E-3, min_size=100, num_rand=20, 
+                 n = 100, num_iters = 1, nCPU=4):
+        column_clusters.__init__(self,k,FDR,min_size,num_rand)
         self.col_cluster_directory = self.col_cluster_directory + 'optimal_clusters/'
-        self.col_cluster_file = self.col_cluster_directory+str(self.num_clusters) + '_optimalcolclusters.xlsx'
+        self.col_cluster_file = self.col_cluster_directory+str(self.num_clusters) \
+                                    + '_optimalcolclusters.xlsx'
         self.num_iters = num_iters
+        self.FDR = FDR
+        self.nCPU = nCPU
         self.n = n
         if not os.path.isdir(self.col_cluster_directory):
             os.mkdir(self.col_cluster_directory)
@@ -188,7 +124,7 @@ class optimal_column_clusters(column_clusters):
             df['initial_cut_edges'] = [ast.literal_eval(val) for val in df['initial_cut_edges'].values]
             self.optimal_results = df
         else:
-            icc = initial_column_clusters(self.num_clusters,self.min_size,self.num_rand)
+            icc = initial_column_clusters(self.num_clusters,self.FDR,self.min_size,self.num_rand)
             icc.load_column_clusters(overwrite=overwrite)
             self.icc = icc
             self.optimal_col_cluster()
@@ -214,9 +150,12 @@ class optimal_column_clusters(column_clusters):
         initial.sort_values(by=['initial_cluster_residual'],ascending=True,inplace=True)
         initial=initial[:self.n]
         
-        pandarallel.initialize()
+        pandarallel.initialize(nb_workers=self.nCPU)
         
-        initial[['optimal_cluster_assign','optimal_cut_edges','optimal_residual']] = initial.parallel_apply(apply_optimal,axis=1, result_type="expand")
+        initial[['optimal_cluster_assign',
+                 'optimal_cut_edges',
+                 'optimal_residual']] = initial.parallel_apply(apply_optimal,axis=1, 
+                                                               result_type="expand")
         
         self.optimal_results = initial
        
@@ -228,4 +167,103 @@ class optimal_column_clusters(column_clusters):
         results.sort_values(by=['optimal_residual'],ascending=True,inplace=True)
         optimal_tree = tree_cluster(self.g,self.create_rowclusterM(),self.num_clusters)
         optimal_tree.initialize_components(initial_cutedges=results.iloc[0]['optimal_cut_edges'])
-        optimal_tree.treeplot(savepath=self.col_cluster_directory + str(self.num_clusters) + '_optimal_tree.pdf')
+        optimal_tree.treeplot()
+        
+        
+class initial_column_clusters(column_clusters):
+    
+    def __init__(self,k,FDR=1E-3,min_size=100,num_rand=20):
+        column_clusters.__init__(self,k,FDR,min_size,num_rand)
+        self.col_cluster_directory = self.col_cluster_directory+'initial_clusters/'
+        self.col_cluster_file = self.col_cluster_directory+str(self.num_clusters) \
+                                    + '_initialcolclusters.xlsx'
+                                    
+        nxG = nx.from_edgelist(self.g.get_edgelist(),nx.DiGraph())
+        self.nxG_map = dict(zip(nxG.nodes(),self.g.vs['name']))
+        self.nxG = nx.relabel_nodes(nxG,self.nxG_map)
+        self.results = pd.DataFrame(data = None, 
+                                    columns = ['initial_cluster_assign',
+                                               'initial_cut_edges',
+                                               'initial_cluster_residual',
+                                               'generated'])
+        if not os.path.isdir(self.col_cluster_directory):
+            os.mkdir(self.col_cluster_directory)
+
+    # add a clustering based on random selection of vertices
+    def add_rand(self):
+        treecluster = tree_cluster(self.g,self.create_rowclusterM(),self.num_clusters)
+        for n in range(self.num_rand):
+            treecluster.initialize_components()
+            newrow = pd.DataFrame([treecluster.compute_residual2()],columns=['initial_cluster_residual'])
+            newrow['initial_cluster_assign'] = [dict(zip(treecluster.g.vs['name'],treecluster.get_assignments()))]
+            newrow['initial_cut_edges'] = [treecluster.cut_edges]
+            newrow['generated'] = 'random'
+            self.results = self.results.append(newrow[['initial_cluster_assign',
+                                                       'initial_cut_edges',
+                                                       'initial_cluster_residual',
+                                                       'generated']])
+    
+    # load clusterings from xlsx file
+    def load_column_clusters(self,overwrite=False):
+        self.get_qualified_cut_vertices()
+        if (os.path.isfile(self.col_cluster_file)) & (overwrite==False):
+            df = pd.read_excel(self.col_cluster_file)
+            df['initial_cluster_assign'] = [ast.literal_eval(val) for val in df['initial_cluster_assign'].values]
+            df['initial_cut_edges'] = [ast.literal_eval(val) for val in df['initial_cut_edges'].values]
+            self.results = df
+        else:
+            self.score_cut_combinations()
+            self.add_rand()
+            self.save_results()
+            
+    # define vertices that are good candidates for cuts
+    def get_qualified_cut_vertices(self):
+        def criteria(G,node):
+            num_direct_inedges = len(G.in_edges(node))
+            num_indirect_outedges = len(nx.nodes(nx.dfs_tree(G, node)))-1
+            if num_direct_inedges==0:
+                return True
+            parent = list(G.predecessors(node))[0]
+            num_direct_outedges_parent = len(G.out_edges(parent))
+            if (num_indirect_outedges>1) & (num_direct_outedges_parent > 1):
+                return True
+            return False
+        G = self.nxG
+        qualified_cut_vertices = []
+        for node in G.nodes():
+            if criteria(G,node):
+                qualified_cut_vertices.append(node)
+        self.qualified_cut_vertices = qualified_cut_vertices
+        
+    # add clusterings based on "qualified" vertices
+    def score_cut_combinations(self,save=False):
+        def convertToDict(clustering):
+            returndict = {}
+            for cluster in range(len(clustering)):
+                for node in clustering[cluster]:
+                    returndict.update({node:cluster})
+            return returndict
+       
+        cut_vertices = self.qualified_cut_vertices.copy()
+        cut_vertices.remove(self.rootnode)
+        inv_nxG_map = {v: k for k, v in self.nxG_map.items()}
+        combinations = [list(combination) for combination in itertools.combinations(cut_vertices,self.num_clusters-1)]
+        cut_edges = [[[(u,inv_nxG_map.get(v))] for v in comb for u in self.g.predecessors(inv_nxG_map.get(v))] for comb in combinations]
+        combinations = [[self.rootnode] + comb for comb in combinations]
+        
+        pdb.set_trace()
+        m_wclusterassign = pd.merge(self.m,self.clusters,left_index=True,right_on='row',how='left')
+        m_wclusterassign.set_index('row',inplace=True)
+        m_wclusterassign.index = m_wclusterassign.index.rename('index')
+        
+       
+        p = multiprocessing.Pool(processes=2)
+        results = p.starmap(clusterScores,zip(combinations,itertools.repeat(self.nxG),itertools.repeat(m_wclusterassign)))   
+        results = pd.DataFrame(results, columns = ['initial_cluster_residual', 'initial_cluster_assign'])
+        results['generated'] = 'selected'
+        results['initial_cluster_assign'] = results['initial_cluster_assign'].map(lambda x: convertToDict(x))
+        results['initial_cut_edges'] = cut_edges
+        self.results = self.results.append(results[['initial_cluster_residual','initial_cut_edges','initial_cluster_assign','generated']],ignore_index=True)
+        
+    def save_results(self):
+        self.results.to_excel(self.col_cluster_file,index=False)

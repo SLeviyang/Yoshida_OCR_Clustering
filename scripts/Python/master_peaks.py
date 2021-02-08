@@ -11,29 +11,49 @@ import mm10
 
 from Bio.SeqUtils import GC
 
-# Classes to access the master idr matrix
+def make_all_master_peaks(FDR=[0.01, 0.05, 0.10, 0.15]):
+    for cFDR in FDR:
+        print(["constructing master peaks for FDR", cFDR])
+        master_peaks(cFDR)
+
+# Classes to access the master idr peaks.
 class master_peaks:
     
   master_peaks_dir = conf.DATA_DIR + "master_peaks/"
   
-  # input files (downloaded from S3)
-  table_file = conf.INPUT_DATA + "master_peak_table.bed"
-  input_matrix_file = conf.INPUT_DATA + "master_peak_matrix.txt"
+  def __init__(self, FDR):
+      
+      
+        if not FDR in [0.01, 0.05, 0.10, 0.15]:
+            sys.exit("This FDR is not available")
+            
+        FDR_s = str(round(100*FDR))
+        if len(FDR_s) == 1:
+            FDR_s = "0" + FDR_s
+        FDR_s = "FDR_" + FDR_s
+            
+        # input files (downloaded from S3)
+        id = conf.INPUT_DATA + "master/"
+        self.input_bed_file = id + "master_idr_nonoverlapping_" + FDR_s + ".bed"
+        self.input_matrix_file = id + "master_idr_matrix_" + FDR_s + ".txt"
+            
+        # output files
+        mpd = self.master_peaks_dir
+        self.matrix_file = mpd + "master_idr_matrix_" + FDR_s + ".csv"
+        self.sequence_file = mpd + "master_peak_sequences_" + FDR_s + ".txt"
+        self.genomic_file = mpd + "master_peak_genomic_info_" + FDR_s + ".csv"
   
-  # output files
-  matrix_file = master_peaks_dir + "master_peak_matrix.csv"
-  sequence_file = master_peaks_dir + "master_peak_sequences.txt"
-  genomic_file = master_peaks_dir + "master_peak_genomic_info.csv"
-  
-  def __init__(self):
+        
+        if not os.path.isfile(self.input_matrix_file):
+            sys.exit("input matrix is missing!")
+        if not os.path.isfile(self.input_bed_file):
+            sys.exit("input bed file is missing!")
         if not os.path.isdir(self.master_peaks_dir):
             os.mkdir(self.master_peaks_dir)
-        if not os.path.isfile(self.input_matrix_file):
-            sys.exit("input peak matrix is missing!")
+            
         if not os.path.isfile(self.matrix_file):
                 self.create_matrix()
-        if not os.path.isfile(self.table_file):
-            sys.exit("peak bed file is missing!")
+        
         if not os.path.isfile(self.sequence_file):
             if not os.path.isfile(conf.BEDTOOLS_PATH):
               print("bedtools path not found. skipping OCR sequence creation")
@@ -47,9 +67,9 @@ class master_peaks:
               print("creating genomic information file...")
               self.create_genomic_information()
         
+  # constructor methods
           
   def create_matrix(self):
-      pdb.set_trace()
       input_matrix_cell_types = self.get_input_cell_types()
       y_cell_types = Yoshida.Yoshida_tree().load_igraph().vs["name"]
       input_matrix = pd.read_csv(self.input_matrix_file, sep=" ").to_numpy()
@@ -65,7 +85,7 @@ class master_peaks:
       
       
   def create_sequences(self):
-      tb = self.load_table()[["chr", "chrStart", "chrEnd"]]
+      tb = self.load_input_bed()[["chr", "chrStart", "chrEnd"]]
       tempfile = "temp_master_peaks" + str(np.round(1E10 * np.random.uniform())) + ".bed"
      
       tb.to_csv(tempfile, sep="\t", header=None, index=False)
@@ -83,7 +103,7 @@ class master_peaks:
       
       mm10.mm10_biomart().to_bed(TSSfile, padding=0)
       os.environ["btools"] = conf.BEDTOOLS_PATH
-      os.environ["peakbed"] = self.table_file
+      os.environ["peakbed"] = self.input_bed_file
       
       os.environ["tf"] = TSSfile
       os.environ["of"] = outfile
@@ -94,7 +114,7 @@ class master_peaks:
                               "score", "x", "y", "z", "gene", "dTSS"])
       
       # debug check
-      peak_tb = pd.read_csv(self.table_file, sep="\t", header=None)
+      peak_tb = pd.read_csv(self.input_bed_file, sep="\t", header=None)
       if not len(peak_tb) == len(bedtools_tb):
           sys.exit("problem with bedtools closest script!")
       bedtools_tb = bedtools_tb[["dTSS", "gene"]]
@@ -108,13 +128,6 @@ class master_peaks:
       
       os.remove(TSSfile)
       os.remove(outfile)
-      
-   
-  def get_cell_types(self):
-      d = pd.read_csv(self.matrix_file, sep=",", nrows=1, header=None)
-      cn = d.to_numpy().tolist()[0]
-      
-      return cn
     
   # there is a descrepancy between a few cell type names in the Yoshida provided csv
   # file/article and in the cell type names I produce in my s3 bucket because of typos
@@ -154,6 +167,14 @@ class master_peaks:
       
       return  conversion
   
+  # accessor methods
+  
+  def get_cell_types(self):
+      d = pd.read_csv(self.matrix_file, sep=",", nrows=1, header=None)
+      cn = d.to_numpy().tolist()[0]
+      
+      return cn
+  
   def load_sequences(self):
       if os.path.isfile(self.sequence_file):
         d = pd.read_csv(self.sequence_file, header=None)
@@ -180,8 +201,8 @@ class master_peaks:
       d = d.to_numpy()
       return d
   
-  def load_table(self):
-      d = pd.read_csv(self.table_file, sep="\t", header=None,
+  def load_input_bed(self):
+      d = pd.read_csv(self.input_bed_file, sep="\t", header=None,
                       names=["chr", "chrStart", "chrEnd", "score"])
       return d
   

@@ -1,6 +1,7 @@
 import configuration as conf
 import peak_clusters as pk
 import utilities
+import Yoshida
 
 import os, sys
 import pdb
@@ -47,6 +48,8 @@ class TF:
           os.mkdir(self.scaled_motif_dir)
           self.create_genomics_tables(max_cluster_number)
           self.create_scaled_score_matrices(max_cluster_number)
+          
+    
     
     # I can't use the genomics table from peaks_cluster because the window
     # size of the TF search (201) is different than the window size of the 
@@ -63,7 +66,8 @@ class TF:
         
         nuc_tb.to_csv(out_file, sep=",", index=False)
       
-    
+    # quantile normalize motif scores, normalizing across
+    # motifs and across all clustersß
     def create_scaled_score_matrices(self, max_cluster_number):
         
       m_list = []
@@ -150,9 +154,20 @@ class TF:
                          nrows=1, header=None)
         motifs = tb.to_numpy().tolist()[0]
         return motifs
+    
+    def get_Yoshida_motif_names(self):
+        return Yoshida.Yoshida_data().get_significant_TF()
         
-    def load_score_matrix(self, index, null=False):
-      tb = pd.read_csv(self.get_scale_matrix_filename(index, null),
+    def load_raw_score_matrix(self, cluster_index, null=False):
+      tb = pd.read_csv(self.get_raw_matrix_filename(cluster_index, 
+                                                      null),
+                       sep=",")
+      m = tb.to_numpy()
+      return m
+        
+    def load_score_matrix(self, cluster_index, null=False):
+      tb = pd.read_csv(self.get_scale_matrix_filename(cluster_index, 
+                                                      null),
                        sep=",")
       m = tb.to_numpy()
       return m
@@ -162,6 +177,24 @@ class TF:
                        sep=",")
             
         return tb
+    
+    def raw_FDR(self, FDR=.01):
+        call_list = []
+        q = 1 - FDR
+        for index in range(self.ncluster):
+          print(["calculating calls for cluster", index])
+          m = self.load_raw_score_matrix(index, null=False)
+          mn = self.load_raw_score_matrix(index, null=True)
+          nc = mn.shape[1]
+      
+          cutoffs = [np.quantile(mn[:,i], q=q) for i in range(nc)]
+          calls = [np.mean(m[:,i] > cutoffs[i]) for i in range(nc)]
+          call_list.append(calls)
+          
+        tb = pd.DataFrame(call_list, 
+                          columns = self.get_motif_names())
+        tb = tb.loc[:,np.max(tb, 0) > .2]
+        return (tb)
   
     def load_scores_for_motif(self, motif, 
                               ncluster=None,
@@ -172,32 +205,36 @@ class TF:
         mindex = np.where(all_motifs == motif)[0]
         m_list =[]
         for i in range(ncluster):
+          print(["loading cluster", i])
           cm = self.load_score_matrix(i, null=null)
-          m_list.append(cm[:,mindex].flatten().tolist())
+          cmf = cm[:,mindex].flatten()
+          
+          m_list.append(cmf[~np.isnan(cmf)].tolist())
           
         return m_list
   
-    def find_within_cluster_enriched(self, index1, index2):
+    def heatmap(self, use_Yoshida=True, null=False):
+        mean_list = []
+        all_TF = self.get_motif_names()
+        if use_Yoshida:
+            int_TF = self.get_Yoshida_motif_names()
+        else:
+            int_TF = all_TF  
+        int_TF = [s.upper() for s in int_TF]
+        all_TF = [s.upper() for s in all_TF]
         
-        m = self.load_score_matrix(index1, null=False)
-        nm = self.load_score_matrix(index2, null=False)
-        motif_names = self.get_motif_names()
-        
-        y = np.concatenate((np.repeat(1, m.shape[0]), 
-                         np.repeat(0, nm.shape[0])))
-        X = np.concatenate((m, nm), axis=0)
-        
-        #X = X[0:100,1:50]
-        #y = np.concatenate((np.repeat(1, 50), 
-         #                np.repeat(0, 50)))*1.0
+        active_cols = [x in int_TF for x in all_TF]
+        active_TF = [x for x in all_TF if x in int_TF]
       
-        f =  sklin.LogisticRegressionCV(cv=5, 
-                                        random_state=0,
-                                        max_iter=1000,
-                                        penalty="l1")
-        f.fit(X, y)
-        
-        pdb.set_trace()
+        for i in range(self.ncluster):
+            m = self.load_score_matrix(i, null=null)[:,active_cols]
+            mean_list.append(np.mean(m, 0) > 2)
+            
+        m_TF = np.array(mean_list)
+        sns.heatmap(m_TF)
+        return (active_TF)
+                             
+            
        
         
         
