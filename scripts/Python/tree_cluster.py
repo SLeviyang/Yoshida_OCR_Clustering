@@ -89,19 +89,33 @@ class tree_cluster:
         
     # pick random cut vertices and include all outgoing edges
     # as the cut edges
-    def initialize_components(self,initial_cutedges = []):
+    def initialize_components(self,initial_cutedges = [], assignments = []):
         g = self.g
-        if(len(initial_cutedges)>0):
-            cut_edges = initial_cutedges
-        else:    
-            cut_vertices = np.random.choice(self.info['internal'], 
-                                                self.K-1, 
-                                                replace=False)
-            # all children will form cut edges
-            cut_edges = [[(v, u) for u in g.neighbors(v, mode=ig.OUT)] for v in cut_vertices]     
-        self.cut_edges = cut_edges
-        self.update_components()
-        
+        if len(assignments)>0:
+            if not self.K == len(set(assignments)):
+                pdb.set_trace()
+                sys.exit("number of components does not equal number of clusters")
+          
+            self.assignments = assignments
+            self.update_mediods()            
+            
+            cut_edges = []
+            for cluster in range(1,self.K):
+                in_cluster = [vertex for vertex, a in enumerate(assignments) if a==cluster]
+                cut_edges_cluster = [(u,v) for v in in_cluster for u in self.g.predecessors(v) if u not in in_cluster]
+                cut_edges.append(cut_edges_cluster)
+            self.cut_edges = cut_edges
+        else:
+            if(len(initial_cutedges)>0):
+                cut_edges = initial_cutedges
+            else:    
+                cut_vertices = np.random.choice(self.info['internal'], 
+                                                    self.K-1, 
+                                                    replace=False)
+                # all children will form cut edges
+                cut_edges = [[(v, u) for u in g.neighbors(v, mode=ig.OUT)] for v in cut_vertices]     
+            self.cut_edges = cut_edges
+            self.update_components()
     # cut vertices are the parent vertices of the cut edges
     def get_cut_vertices(self):
         v = [e[0][0] for e in self.cut_edges]
@@ -122,7 +136,6 @@ class tree_cluster:
             link_edges = [(link_vertex, ce[1]) for ce in e]
             g_comp.add_edges(link_edges)
             g_comp.delete_edges(e)
-             
         # get components
         all_assignments = np.array(g_comp.components(mode=ig.WEAK).membership)
         assignments = all_assignments[range(self.g.vcount())]
@@ -247,8 +260,6 @@ class tree_cluster:
                 iteration = iteration + 1
            else:
                 break
-            
-    
             
     # find best of many optimizations 
     def fit(self, num_runs=10):
