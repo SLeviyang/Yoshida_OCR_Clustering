@@ -394,7 +394,7 @@ class optimize_tree_cluster:
 def computeCluster(cut_edges,g,m_list,num_clusters):
     tc = tclust.tree_cluster(num_clusters, g, m_list)
     tc.initialize_components(initial_cutedges = cut_edges)
-    return tclust.compute_residual2(), tc.assignments
+    return tc.compute_residual2(), tc.assignments
 
 def optimizeCluster(assignments,g,m_list,num_clusters):
     tc = tclust.tree_cluster(num_clusters, g, m_list)
