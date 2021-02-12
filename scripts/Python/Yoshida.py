@@ -2,15 +2,13 @@ import configuration as conf
 import mm10 
 
 import pandas as pd
-import os
+import os, sys
 import igraph as ig
 import numpy as np
 import matplotlib.pyplot as plt
 import pdb
 import qnorm
-import Bio.Cluster as BioC
-import scipy.spatial as scipyS
-import sys
+
 
 # Creates the igraph Graph object for the Yoshida tree.
 #
@@ -115,7 +113,8 @@ class Yoshida_ATACseq_idr:
       return tb
   
   def load_bed(self):
-      return pd.read_csv(self.input_bed_file, sep="\t").iloc[:,0:3]
+      return pd.read_csv(self.input_bed_file, sep="\t", header=None,
+                         names=["chr", "chrStart", "chrEnd", "score"]).iloc[:,0:3]
         
  
     
@@ -154,8 +153,8 @@ class Yoshida_ATACseq_counts:
         #p = d["_-log10_bestPvalue"]
         
         t = pd.DataFrame({'chr':chrom,
-                           'chrStart':s,
-                           'chrEnd':s})
+                           'chrStart':s-125,
+                           'chrEnd':s+125})
         return t
      
     def load_count_table(self):

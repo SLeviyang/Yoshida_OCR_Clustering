@@ -3,6 +3,8 @@ import Yoshida
 import utilities
 import row_clusters
 import mm10
+import optimize_tree_cluster as otc
+import tree_cluster
 
 import sys, os
 import numpy as np
@@ -11,35 +13,62 @@ import pdb
 import matplotlib.pyplot as plt
 import igraph as ig
 import seaborn as sns
+from pandarallel import pandarallel as pll
 
-def make_all_workflows():
-    FDR = [0.01, 0.05, 0.10, 0.15]
-    for f in FDR:
-        workflow("idr", FDR=f)
-        
-    cutoffs = [2,5,10]
-    for cc in cutoffs:
-        workflow("count", count_cutoff=cc)
+
+def make_all_workflows(ncore=4):
+  edge_FDR = [0.01, 0.001, 0.0001]
+  idr_FDR = [0.01, 0.05, 0.10, 0.15]
+  tb = pd.DataFrame([[x,y] for x in idr_FDR for y in edge_FDR],
+                    columns=["idr_FDR", "edge_FDR"]).sort_values("idr_FDR")
+  
+  # make idr workflows
+  pll.initialize(nb_workers=ncore,
+                 progress_bar=True)
+  tb.apply(lambda s : workflow("idr", 
+                               edge_FDR=s["edge_FDR"],
+                               idr_FDR=s["idr_FDR"]),
+           axis=1)
+  
+  count_cutoffs = [2,5,10]
+  tb = pd.DataFrame([[x,y] for x in count_cutoffs for y in edge_FDR],
+                    columns=["cutoff", "edge_FDR"]).sort_values("cutoff")
+  
+  tb.apply(lambda s : workflow("count", 
+                               edge_FDR=s["edge_FDR"],
+                               count_cutoff=s["cutoff"]),
+           axis=1)
 
 
 # For a particular binary matrix and bed file, run through the
 # workflow of row clustering
 #
 # @param binary_matrix_source One of "count" or "idr"
-# @param FDR float giving FDR for idr.  Only relevant for "idr" source
+# @param edge_FDR FDR for calling edges in clustering
+# @param idr_FDR float giving FDR for idr.  Only relevant for "idr" source
 # @param count_cutoff scaler giving count cutoff.  Only relevant for "count"
+# @param n_starting_points number of starting points to test for tree clustering,
+# This number of random and smart (see optimize_tree_cluster) starting points are
+# used
+# @param max_K columns cluster for k=2,3,..,max_K
 
 class workflow:
     
-    def __init__(self, binary_matrix_source,
-                 FDR = None,
-                 count_cutoff = None):
+    def __init__(self, 
+                 binary_matrix_source,
+                 edge_FDR,
+                 idr_FDR = None,
+                 count_cutoff = None,
+                 n_starting_points = 2,
+                 max_K=5,
+                 ncore=4):
         
         # check if genomics should be implemented
         if conf.BEDTOOLS_PATH == "":
             self.include_genomics = False
         else:
             self.include_genomics = True
+        self.edge_FDR = edge_FDR
         
         if not binary_matrix_source in ["count", "idr"]:
             sys.exit("binary_matrix_source muast be count or idr")
@@ -47,13 +76,14 @@ class workflow:
         if binary_matrix_source == "count" and (count_cutoff is None):
             sys.exit("count_cutoff must be specified for count source")
             
-        if binary_matrix_source == "idr" and (FDR is None):
-            sys.exit("FDR must be specified for idr source")
+        if binary_matrix_source == "idr" and (idr_FDR is None):
+            sys.exit("idr_FDR must be specified for idr source")
             
         if binary_matrix_source == "count":
             tag = "Yoshida_count_matrix_cutoff_" + str(count_cutoff) 
         else:
-            tag = "Yoshida_idr_matrix_FDR_" + str(round(100*FDR))
+            tag = "Yoshida_idr_matrix_idr_" + str(idr_FDR)
+        tag = tag + "_edge_FDR_" + str(edge_FDR)
             
         print(["building workflow", tag])
             
@@ -63,13 +93,22 @@ class workflow:
         if not os.path.isdir(self.output_dir):
             os.mkdir(self.output_dir)
             
-        # output files
-        self.matrix_file = self.output_dir + tag + "_matrix.csv"
-        self.bed_file = self.output_dir + tag + "_loci.bed"
-        self.edge_file = self.output_dir + tag + "_edges.csv"
-        self.cluster_file = self.output_dir + tag + "_clusters.csv"
-        self.genomics_file = self.output_dir + tag + "_genomics.csv"
-        self.sequences_file = self.output_dir + tag + "_sequences.csv"
+        self.g = Yoshida.Yoshida_tree().load_igraph()
+        self.m_list = None
+        self.ncore = ncore
+            
+        # OUTPUT FILES
+        # starting data for the workflow
+        self.matrix_file = self.output_dir + "matrix.csv"
+        self.bed_file = self.output_dir  + "loci.bed"
+        self.genomics_file = self.output_dir + "genomics.csv"
+        self.sequences_file = self.output_dir  + "sequences.csv"
+        # row clustering files
+        self.edge_file = self.output_dir  + "edges.csv"
+        self.cluster_file = self.output_dir + "clusters.csv"
+        # tree cluster files
+        self.starting_points_file = self.output_dir + "starting_points.csv"
+        self.fits_file = self.output_dir + "tree_cluster_fits.csv"
         
         # run the workflow
         
@@ -78,7 +117,7 @@ class workflow:
             (not os.path.isfile(self.bed_file))):
           print("creating binary matrix and bed files...")
           self.create_workflow_inputs(binary_matrix_source, 
-                                      FDR, count_cutoff)
+                                      idr_FDR, count_cutoff)
         
         # 1b. if genomics is needed, use bed file to create
         # a genomics table and the loci sequences
@@ -89,18 +128,34 @@ class workflow:
             if not os.path.isfile(self.genomics_file):
               print("creating genomics file...")
               self.create_genomics()
-            
-      
-          
+              
+   
         # 2. apply row clustering to the binary matrix
         if ((not os.path.isfile(self.edge_file)) or 
             (not os.path.isfile(self.cluster_file))):
           print("clustering rows of binary matrix...")
-          self.cluster_rows()
+          self.cluster_rows(edge_FDR)
           
+        self.m_list = self.get_row_cluster_view().form_m_list(min_cluster_size=50)
+          
+        # 3. create starting points for column clustering
+        if not os.path.isfile(self.starting_points_file):
+            self.create_starting_points(N=n_starting_points,
+                                        start_k=2,
+                                        end_k=max_K,
+                                        g=self.g, 
+                                        m_list=self.m_list)
+            
+        # 4. apply column clustering optimizations using starting
+        # points
+        if not os.path.isfile(self.fits_file):
+            self.create_fits(g=self.g,
+                             m_list=self.m_list)
+            
+    # constructor methods
         
     def create_workflow_inputs(self, binary_matrix_source, 
-                               FDR, count_cutoff):
+                               idr_FDR, count_cutoff):
         if binary_matrix_source == "count":
             y = Yoshida.Yoshida_ATACseq_counts()
             tb = y.load_count_table()
@@ -108,7 +163,7 @@ class workflow:
             
             m = (tb.to_numpy() > count_cutoff)*np.int32(1)
         else:
-            y = Yoshida.Yoshida_ATACseq_idr(FDR)
+            y = Yoshida.Yoshida_ATACseq_idr(idr_FDR)
             tb = y.load_idr_table()
             b = y.load_bed()
             
@@ -127,7 +182,7 @@ class workflow:
         tb_out = pd.DataFrame(m[:,y_ind], 
                               columns = cell_types)
         
-        b.to_csv(self.bed_file, sep="\t", index=False)
+        b.to_csv(self.bed_file, sep="\t", index=False, header=False)
         tb_out.to_csv(self.matrix_file, sep=",", index=False)
         
     def create_sequences(self):
@@ -183,17 +238,54 @@ class workflow:
     
         
         
-    def cluster_rows(self):
+    def cluster_rows(self, edge_FDR):
         m = self.load_matrix()
-        rc = row_clusters.row_cluster(m)
+        rc = row_clusters.row_cluster(m, FDR=edge_FDR)
         rc.edges.to_csv(self.edge_file, sep=",", index=False)
         rc.clusters.to_csv(self.cluster_file, sep=",", index=False)
+        
+    def create_starting_points(self, N, start_k, end_k,
+                               g, m_list):      
+        tb_list = []
+        for k in range(start_k, end_k+1):
+            print(["generating starting points for K=", k])
+            oc = otc.optimize_tree_cluster(k, g, m_list, 
+                                           nCPU=self.ncore)
+            oc.generate_starting_points(n_random=N, n_smart=N)
+            ctb = oc.get_starting_points(as_dataFrame=True)
+            ctb.insert(ctb.shape[1], "K", k)
+            tb_list.append(ctb)
             
+        tb = pd.concat(tb_list, axis=0)
+        tb.to_csv(self.starting_points_file, sep=",", index=False)
+        
+    def create_fits(self, g, m_list):
+        tb = self.load_starting_points().groupby("K")
+        fit_tb_list = []
+        for k,ctb in tb:
+            temp_file = "temp_sp_" + str(np.random.uniform()) + ".csv"
+            ctb = ctb.drop("K", axis=1)
+            ctb.to_csv(temp_file, sep=",", index=False)
+            oc = otc.optimize_tree_cluster(k, g, m_list,
+                                           starting_points_file=temp_file,
+                                           nCPU=self.ncore)
+            # check
+            if not ctb.shape[0] == len(oc.get_starting_points()):
+                sys.exit("this should never happen!")
+            oc.optimize()
+            ctb = oc.get_fits(as_dataFrame=True)
+            ctb.insert(ctb.shape[1], "K", k)
+            fit_tb_list.append(ctb)
+        
+        fit_tb = pd.concat(fit_tb_list, axis=0)
+        fit_tb.to_csv(self.fits_file, sep=",", index=False)
+        
+    # accessor methods
     def load_matrix(self):
         return pd.read_csv(self.matrix_file, sep=",").to_numpy()
         
     def load_bed(self):
-        return pd.read_csv(self.bed_file, sep="\t",
+        return pd.read_csv(self.bed_file, sep="\t", header=None,
                            names=["chr", "chrStart", "chrEnd"])
     
     def load_genomics(self):
@@ -215,8 +307,17 @@ class workflow:
     def load_clusters(self):
         return pd.read_csv(self.cluster_file, sep=",")
     
+    def load_starting_points(self):
+        return pd.read_csv(self.starting_points_file, sep=",")
+    
+    def load_fits(self):
+        return pd.read_csv(self.fits_file, sep=",")
+    
     def load_tree(self):
-        return Yoshida.Yoshida_tree().load_igraph()
+        return self.g
+    
+    def load_m_list(self):
+        return self.m_list
     
     def get_row_cluster_view(self):
         return row_cluster_view(self.load_matrix(),
@@ -275,7 +376,17 @@ class row_cluster_view:
             info.append(ci)
         
         return pd.DataFrame(info)
-       
+    
+    def form_m_list(self, min_cluster_size=50):
+        ci = self.get_cluster_info()
+        ci = ci[ci["size"] >= min_cluster_size]
+        
+        active_clusters = ci["cluster"].tolist()
+        m_list = []
+        for i in active_clusters:
+            m_list.append(self.form_cluster_matrix(i))
+            
+        return m_list
     
     def form_cluster_matrix(self, index):
         

@@ -5,7 +5,6 @@ import utilities
 import numpy as np
 import pandas as pd
 import pdb
-import master_peaks as mp
 import os
 from sknetwork.clustering import Louvain
 import igraph as ig
@@ -25,10 +24,11 @@ import seaborn as sns
 # cluster
 class row_cluster: 
    
-    def __init__(self, m, FDR=.01, homo_cutoff=2):
+    def __init__(self, m, FDR, homo_cutoff=2):
         self.np = null_row_cluster()
         # binary matrix
         self.m = m.astype("float")
+        self.FDR = FDR
         
         self.edges = self.compute_edges(FDR=FDR)
         self.clusters = self.compute_clusters(self.edges, 

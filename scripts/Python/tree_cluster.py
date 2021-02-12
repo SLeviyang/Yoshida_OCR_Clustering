@@ -6,6 +6,8 @@ import copy
 import itertools as it
 import pandas as pd
 import matplotlib.pyplot as plt
+import time
+import seaborn as sns
 
 # Tree cluster class
 #
@@ -34,7 +36,7 @@ import matplotlib.pyplot as plt
 # with that cut vertex are considered.
 class tree_cluster:
     
-    def __init__(self, g, m_list, K):
+    def __init__(self, K, g, m_list):
         self.K = K
         self.m = m_list
         self.g = g
@@ -47,6 +49,9 @@ class tree_cluster:
             sys.exit("number of vertices does not match number of columns")
         
         self.info = self.form_tree_information(g)
+        # only allow 0,1,2 cut edge groups from a single vertex, more
+        # is to computationaly intensive
+        self.max_num_cut_edge_groups_from_vertex = 2
        
         # checks on K
         if K < 2 or K > len(self.info["internal"]):
@@ -72,6 +77,7 @@ class tree_cluster:
         root = np.where(is_root)[0][0]
         
         children = [g.neighbors(v, mode=ig.OUT) for v in range(nv)]
+        descendants = [g.neighborhood(v, order=int(1E6), mode="OUT") for v in range(nv)]
         leaves = [v for v in range(nv) if len(children[v]) == 0]
         
         # internal vertices are possible cut vertices
@@ -79,32 +85,34 @@ class tree_cluster:
         for v in leaves:
             internal_vertices.remove(v)
             
+        # define pmf on internal nodes so we can quickly sample them
+        # in initialization
+        internal_weights = np.array([len(descendants[v]) for v in internal_vertices])
+        internal_weights = internal_weights/np.sum(internal_weights)
+            
         info = {'root':root,
                 'leaves':leaves,
                 'internal':internal_vertices,
-                'children':children}
+                'internal_weights':internal_weights,
+                'children':children,
+                'descendants':descendants}
         
         return info
  
         
     # pick random cut vertices and include all outgoing edges
     # as the cut edges
-    def initialize_components(self,initial_cutedges = [], assignments = []):
+    def initialize_components(self,initial_cutedges = [], 
+                              assignments = []):
         g = self.g
         if len(assignments)>0:
             if not self.K == len(set(assignments)):
                 pdb.set_trace()
                 sys.exit("number of components does not equal number of clusters")
-          
-            self.assignments = assignments
-            self.update_mediods()            
+           
+            self.cut_edges = self.assignments2cutedges(assignments)
+            self.update_components()
             
-            cut_edges = []
-            for cluster in range(1,self.K):
-                in_cluster = [vertex for vertex, a in enumerate(assignments) if a==cluster]
-                cut_edges_cluster = [(u,v) for v in in_cluster for u in self.g.predecessors(v) if u not in in_cluster]
-                cut_edges.append(cut_edges_cluster)
-            self.cut_edges = cut_edges
         else:
             if(len(initial_cutedges)>0):
                 cut_edges = initial_cutedges
@@ -116,6 +124,7 @@ class tree_cluster:
                 cut_edges = [[(v, u) for u in g.neighbors(v, mode=ig.OUT)] for v in cut_vertices]     
             self.cut_edges = cut_edges
             self.update_components()
+            
     # cut vertices are the parent vertices of the cut edges
     def get_cut_vertices(self):
         v = [e[0][0] for e in self.cut_edges]
@@ -126,6 +135,16 @@ class tree_cluster:
     
     def get_mediods(self):
         return self.mediods
+    
+    # a utility method to convert assignments to cut edges
+    def assignments2cutedges(self, assignments):
+      cut_edges = []
+      for cluster in range(1,np.max(assignments)+1):
+         in_cluster = [vertex for vertex, a in enumerate(assignments) if a==cluster]
+         cut_edges_cluster = [(u,v) for v in in_cluster for u in self.g.predecessors(v) if u not in in_cluster]
+         cut_edges.append(cut_edges_cluster)
+                
+      return cut_edges
            
     def update_components(self):
         g_comp = self.g.copy()
@@ -174,82 +193,230 @@ class tree_cluster:
             ss2 = ss2 + np.sum(res2)
             
         return ss2
-   
     
-    # for a given cut vertex, all outgoing edges can be cut edges.
-    # execute a step of a stochastic ascent over the
-    # possible combinations of the cut edges
-    def optimize_cut_edges(self, index, noise=0):
+    # modify the cut edges
+    def execute_modification(self, mod, update=True):
+ 
+            op = mod["operation"]
+            if op == "add":
+              self.cut_edges[mod["edge group"]].append(mod["edge"])
+            elif op == "remove":
+              self.cut_edges[mod["edge group"]].remove(mod["edge"])    
+            elif op == "transfer":
+              self.cut_edges[mod["start edge group"]].remove(mod["edge"])  
+              self.cut_edges[mod["end edge group"]].append(mod["edge"]) 
+            else:
+              sys.exit("this should never happen!")
+              
+            if update:
+                self.update_components()
         
-        cut_vertex = self.get_cut_vertices()[index]
-        children = self.info['children'][cut_vertex]
-        nc = len(children)
-        if nc == 1:
-            return None
-        e = [(cut_vertex, child) for child in children]
-        
-        # all possible combinations of children, with at least one
-        # child
-        configs_it = it.product([False, True],repeat=nc)
-        configs = np.array([x for x in configs_it])
-        configs = configs[np.sum(configs, 1) != 0,:]
-        
-        loss = np.repeat(-1, configs.shape[0])
-        for r in range(configs.shape[0]):
-            current_edges = [e[i] for i in range(nc) if configs[r,i]]
-            self.cut_edges[index] = current_edges
-            self.update_components()
-            loss[r] = self.compute_residual2()
-            
-        best_row = np.argmin(loss)
-        final_edges = [e[i] for i in range(nc) if configs[best_row,i]]
-        self.cut_edges[index] = final_edges
-        self.update_components()
-        
-        
-      
-            
-    # coordinate descent on a single cut vertex
-    def optimize_cut_vertex(self, i, noise=0):
     
+    # Try to reorganize the cut edge groups in vertex v, with the
+    # the total number of cut groups for v held fixed.      
+    def modify_vertex_edge_groups(self, v):
+        
+        # need more than one child
+        if len(self.info["children"][v]) < 2:
+            return False
+        
+        # which cut edge groups are associated with v
+        v_cut_edge_ind = np.where(np.array(self.get_cut_vertices())==v)[0]
+        n_cut_groups = len(v_cut_edge_ind)
+        
+        # need at least one cut group
+        # REALLY, user should only pass cut vertices into this method!
+        if n_cut_groups == 0:
+            return False
+        
+        v_cut_edges = [self.cut_edges[i] for i in v_cut_edge_ind]
+        children = self.info["children"][v]
+        
+        cut_children = [x[1] for e in v_cut_edges for x in e]
+        cut_children_group = [v_cut_edge_ind[i] for i,e in enumerate(v_cut_edges) for x in e]
+        non_cut_children = list(set(children).difference(cut_children))
+        
+        # gather all the modificaitons we want to make
+        modifications_grow = []
+        # move non cut edges into any one of the edge groups
+        for child in non_cut_children:
+            for index in v_cut_edge_ind:
+                modifications_grow.append({'edge':(v,child), 
+                                      'edge group':index,
+                                      'operation':"add"})
+                
+        modifications_prune = []
+        # move cut edges out of edge groups
+        for i,child in enumerate(cut_children):
+            # only remove a child if the group has more than 1 edge
+            if len(self.cut_edges[cut_children_group[i]]) > 1:
+              modifications_prune.append({'edge':(v,child), 
+                                        'edge group':cut_children_group[i],
+                                        'operation':"remove"})
+            
+        modifications_transfer = []
+        # transfer cut edge between groups
+        # we can only transfer edge if group has more than 1 edge
+        v_cut_edge_ind_g1 = [i for i in v_cut_edge_ind if len(self.cut_edges[i]) > 1]
+        for group1 in v_cut_edge_ind_g1:
+          for group2 in v_cut_edge_ind:
+            if group1 == group2:
+              continue
+            for child in [x[1] for x in self.cut_edges[group1]]:
+              modifications_transfer.append({'edge':(v,child), 
+                                             'start edge group':group1,
+                                             'end edge group': group2,
+                                             'operation':"transfer"})
+              
+                    
+        modifications = modifications_grow + modifications_prune \
+                        + modifications_transfer
+                        
+        # modifications will be empty if all the children
+        # are in cut groups that are of size 1
+        if len(modifications) == 0:
+            return False
+                 
+                    
+        # compute loss for all the modifications
         current_loss = self.compute_residual2()
+        save_cut_edges = copy.deepcopy(self.cut_edges)
+        save_a = copy.deepcopy(self.assignments)
+        save_m = copy.deepcopy(self.mediods)
         
-        cut_vertices = self.get_cut_vertices()
-        children = self.info['children']
-        
-        alternate_vertices = copy.deepcopy(self.info['internal'])
-        for v in cut_vertices:
-            alternate_vertices.remove(v)
-          
-        save_edge_cuts = copy.deepcopy(self.cut_edges[i])
-        new_loss = np.repeat(-1.0, len(alternate_vertices))
-        for j in range(len(alternate_vertices)):
-            ca = alternate_vertices[j]
-            self.cut_edges[i] = [(ca,v) for v in children[ca]]
-            self.update_components()
-            new_loss[j] = self.compute_residual2()
+        new_loss = np.zeros(len(modifications))
+        for i,mod in enumerate(modifications):
+            self.execute_modification(mod, update=True)
+            new_loss[i] = self.compute_residual2()
             
-        if (min(new_loss) < current_loss) or (np.random.uniform() < noise):
-            a = alternate_vertices[np.argmin(new_loss)]
-            self.cut_edges[i] = [(a,v) for v in children[a]]
+            # update components without all the computations
+            self.cut_edges = copy.deepcopy(save_cut_edges)
+            self.assignments = copy.deepcopy(save_a)
+            self.mediods = copy.deepcopy(save_m)
+    
+        # update if a modification improves the loss
+        best_mod = np.argmin(new_loss)
+        if new_loss[best_mod] < current_loss:
+            mod = modifications[best_mod]
+            self.execute_modification(mod, update=True)
+            
+            return True
         else:
-            self.cut_edges[i] = save_edge_cuts
+            return False
             
-        self.update_components()
-
+    # Delete an edge group and try to add it to vertex v
+    def remove_and_add_edge_group(self, index, v):
+     
+        v_cut_edge_ind = np.where(np.array(self.get_cut_vertices())==v)[0] 
+        if np.any(np.array(v_cut_edge_ind) == index):
+            sys.exit(["you are calling remove_and_add_edge_group with",
+                      "a vertex that contains the edge group to be",
+                      "deleted.  Don't do this!",
+                      "Call modify_vertex_edge_groups instead"])
+            
+        # we can't add an edge group to v if all children are
+        # in edge groups AND all edge groups have only one child
+        v_cut_edges = [self.cut_edges[i] for i in v_cut_edge_ind]
+        v_cut_edge_sizes = [len(e) for e in v_cut_edges]
+        
+        children = self.info["children"][v]
+        cut_children = [x[1] for e in v_cut_edges for x in e]
+        cut_children_group = [v_cut_edge_ind[i] for i,e in enumerate(v_cut_edges) for x in e]
+        non_cut_children = list(set(children).difference(cut_children))
+           
+        if (len(non_cut_children) == 0) and \
+            (np.all(np.array(v_cut_edge_sizes) == 1)):
+            return False
+        
+        cut_children_g1 = [x[1] for e in v_cut_edges for x in e if len(e) > 1]
+        cut_children_g1_group = [v_cut_edge_ind[i] for i,e in enumerate(v_cut_edges) \
+                                 for x in e if len(e) > 1]
+        save_cut_edges = copy.deepcopy(self.cut_edges)
+        save_loss = self.compute_residual2()
+        
+        # remove the cut edge group
+        #debug_save_cut_edges = copy.deepcopy(self.cut_edges)
+        del self.cut_edges[index]
+        if len(non_cut_children) > 0:
+            # add new group using non-cut child
+            new_edge_group = [(v,np.random.choice(non_cut_children, size=1)[0])]
+            self.cut_edges.append(new_edge_group)
+            self.update_components()
+        else:
+            # add new group by removing a group edge and then adding
+            # it as a new cut group
+            i = np.random.choice(range(len(cut_children_g1)), size=1)[0]
+            # we removed an edge group, so need to adjust group inds
+            if cut_children_g1_group[i] > index:
+                cut_edge_group = cut_children_g1_group[i] - 1
+            else:
+                cut_edge_group = cut_children_g1_group[i]
+            mod = {'edge':(v,cut_children_g1[i]),
+                   'edge group':cut_edge_group,
+                   'operation':"remove"}
+            self.execute_modification(mod, update=False)
+            self.cut_edges.append([(v, cut_children_g1[i])])
+            self.update_components()
+            
+        while self.modify_vertex_edge_groups(v):
+          pass
+      
+        if self.compute_residual2() < save_loss:
+            print(["edge", self.cut_edges[index], " --> vertex", v])
+            return True
+        else:
+            self.cut_edges = save_cut_edges
+            self.update_components()
+            return False
+            
+    # coordinate descent on the cut edges
+    
+    # given a cut edge group, compute the lowest loss if we
+    # move the cut edge to vertex v, over all vertices, and 
+    # move the cut edge to the first vertex with lowest loss
+    def optimize_cut_edge(self, index=None):
+        
+        if index is None:
+            index = np.random.choice(range(len(self.cut_edges)), size=1)[0]
+            
+        current_loss = self.compute_residual2()
+        current_v = self.cut_edges[index][0][0]
+        
+        all_v = copy.deepcopy(self.info["internal"])
+        if current_v in all_v:
+          all_v.remove(current_v)
+        all_v_per = np.random.permutation(all_v)
+       
+          
+        for v in all_v_per:
+          if self.remove_and_add_edge_group(index, v):
+              print(["transfered edge group from vertex", current_v,
+                     "to", v])
+              self.modify_vertex_edge_groups(current_v)
+              print([current_loss, "-->", self.compute_residual2()])
+              return True
+          
+        return False
+            
+    
     # single starting point optimizatino
-    def optimize(self):
+    def optimize(self, assignments = None):
+        start = time.time()
+        
+        print("beginning tree cluster optimization")
+        if not assignments is None:
+            self.initialize_components(assignments = assignments)
+            
         if self.cut_edges is None:
-            sys.exit("cut edges must be initialized before fitting")
+            sys.exit("assignments must be passed or clustering initialized.")
+            
         previous_loss = self.compute_residual2()
         iteration = 1
         while True:
-           print(["iteration", iteration, previous_loss])
+           print(["epoch", iteration, previous_loss])
            indices = np.random.permutation(self.K-1)
            for index in indices:
-                self.optimize_cut_vertex(index)
-                self.optimize_cut_edges(index)
-                print(["index", index, self.compute_residual2()])
+                self.optimize_cut_edge(index)
                 
            current_loss = self.compute_residual2()
            if current_loss > previous_loss:
@@ -261,23 +428,13 @@ class tree_cluster:
            else:
                 break
             
-    # find best of many optimizations 
-    def fit(self, num_runs=10):
-        cut_edges = []
-        loss = np.repeat(-1, num_runs)
-        for i in range(num_runs):
-            print(["run", i])
-            self.initialize_components()
-            self.optimize()
-            cut_edges.append(self.cut_edges)
-            loss[i] = self.compute_residual2()
-            
-        best_cut_edges = cut_edges[np.argmin(loss)]
-        self.cut_edges = best_cut_edges
-        
-        return best_cut_edges
+        end = time.time()
+        print(["optimization time", end - start])
     
-    def treeplot(self,savepath='',vertex_label=False, m_index=None):
+    
+    def treeplot(self,savepath='',
+                 vertex_label=False, 
+                 m_index=None):
         a = self.assignments
         g = self.g
         vs = {}
@@ -298,7 +455,7 @@ class tree_cluster:
             vs["vertex_label"] = [str(i)  for i in range(g.vcount())]
         vs["vertex_label_dist"] = 1.5
            
-        layout = g.layout_reingold_tilford()
+        layout = g.layout_reingold_tilford(mode="all")
      
         if savepath == '':
             pl = ig.plot(g, layout=layout, **vs)
@@ -333,24 +490,19 @@ class tree_cluster:
             for k in range(K):
                 m = self.m[i][:,a==k]
                 hm[i,k] = np.median(np.mean(m, axis=0))
-                
-        #fig, ax = plt.subplots()
-        plt.imshow(hm, interpolation='nearest')
+               
+        sns.heatmap(hm)
+        # #fig, ax = plt.subplots()
+        # plt.imshow(hm, interpolation='nearest')
 
-        # We want to show all ticks...
-        #plt.set_xticks(np.arange(K))
-        #plt.set_yticks(np.arange(lm))
-        # ... and label them with the respective list entries
-        #plt.set_xticklabels([str(i) for i in range(K)])
-        #plt.set_yticklabels(str(i) for i in range(lm))
+    
+        # # Loop over data dimensions and create text annotations.
+        # for i in range(lm):
+        #     for k in range(K):
+        #         text = plt.text(k, i, np.round(10*hm[i, k])/10,
+        #                ha="center", va="center", color="w",
+        #                size="x-small")
 
-        # Loop over data dimensions and create text annotations.
-        for i in range(lm):
-            for k in range(K):
-                text = plt.text(k, i, np.round(10*hm[i, k])/10,
-                       ha="center", va="center", color="w",
-                       size="x-small")
-
-        #plt.set_title("Clusters")
-        #fig.tight_layout()
-        plt.show()
+        # #plt.set_title("Clusters")
+        # #fig.tight_layout()
+        # plt.show()
