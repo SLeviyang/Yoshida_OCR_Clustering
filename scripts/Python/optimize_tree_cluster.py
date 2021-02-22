@@ -141,8 +141,10 @@ class optimize_tree_cluster:
     
     def choose_best_initial_clusters(self, results, n):
         
-        def is_different(cut_one,cut_two,diff_threshold):
-                return len(np.intersect1d(cut_one,cut_two)) >= diff_threshold
+        def is_different(cut_one,cut_two,diff_threshold):  
+            flat_cut_one = [item for sublist in cut_one for item in sublist]
+            flat_cut_two = [item for sublist in cut_two for item in sublist]
+            return len(np.intersect1d(flat_cut_one,flat_cut_two)) <= diff_threshold
             
         if len(results) == 0:
             return None
@@ -156,8 +158,9 @@ class optimize_tree_cluster:
    
         #I use the function ((x-3)^2)/14+(x-3)+2 because it has a 
         # reasonable curve for the domain [2,18]
-        k = self.num_clusters
-        diff_threshold = min(1,int(2+(k-3)-((k-3)**2)/14))
+        #k = self.num_clusters
+        #diff_threshold = max(0,int(2+(k-3)-((k-3)**2)/14))
+        diff_threshold = 0
         cut_edge_list = []
         for i in range(assignments.shape[0]):
           cut_edge_list.append(self.tree_cluster.assignments2cutedges(assignments[i,:]))
@@ -176,13 +179,14 @@ class optimize_tree_cluster:
                   break
             if add:
                 index_list.append(index)
+            index+=1
             
-            #fill remaining indexes with min residuals that did not qualify as different
-            i=1        
-            while len(index_list)<n:
-                if i not in index_list:
-                    index_list.append(i)
-                i+=1
+        #fill remaining indexes with min residuals that did not qualify as different
+        i=1        
+        while len(index_list)<n:
+            if i not in index_list:
+                index_list.append(i)
+            i+=1
             
         return index_list
  
