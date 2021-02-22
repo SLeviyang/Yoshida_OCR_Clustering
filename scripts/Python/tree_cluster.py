@@ -336,33 +336,37 @@ class tree_cluster:
         
         # remove the cut edge group
         #debug_save_cut_edges = copy.deepcopy(self.cut_edges)
-        del self.cut_edges[index]
+        #del self.cut_edges[index]
+        # delete edge group index and...
         if len(non_cut_children) > 0:
-            # add new group using non-cut child
+            # replace with new group using non-cut child
             new_edge_group = [(v,np.random.choice(non_cut_children, size=1)[0])]
-            self.cut_edges.append(new_edge_group)
+            #self.cut_edges.append(new_edge_group)
+            self.cut_edges[index] = new_edge_group
             self.update_components()
         else:
-            # add new group by removing a group edge and then adding
-            # it as a new cut group
+            # add new group by removing a group edge and then 
+            # adding it as a new cut group
             i = np.random.choice(range(len(cut_children_g1)), size=1)[0]
             # we removed an edge group, so need to adjust group inds
-            if cut_children_g1_group[i] > index:
-                cut_edge_group = cut_children_g1_group[i] - 1
-            else:
-                cut_edge_group = cut_children_g1_group[i]
+            #if cut_children_g1_group[i] > index:
+            #    cut_edge_group = cut_children_g1_group[i] - 1
+            #else:
+            #    cut_edge_group = cut_children_g1_group[i]
+            cut_edge_group = cut_children_g1_group[i]
             mod = {'edge':(v,cut_children_g1[i]),
                    'edge group':cut_edge_group,
                    'operation':"remove"}
             self.execute_modification(mod, update=False)
-            self.cut_edges.append([(v, cut_children_g1[i])])
+            #self.cut_edges.append([(v, cut_children_g1[i])])
+            self.cut_edges[index] = [(v, cut_children_g1[i])]
             self.update_components()
             
         while self.modify_vertex_edge_groups(v):
           pass
       
         if self.compute_residual2() < save_loss:
-            print(["edge", self.cut_edges[index], " --> vertex", v])
+            print(["edge", index, " --> vertex", v])
             return True
         else:
             self.cut_edges = save_cut_edges
@@ -452,7 +456,7 @@ class tree_cluster:
         if vertex_label:
             vs["vertex_label"] = g.vs['name']
         else:
-            vs["vertex_label"] = [str(i)  for i in range(g.vcount())]
+            vs["vertex_label"] = [str(i) + "-" + str(a[i])  for i in range(g.vcount())]
         vs["vertex_label_dist"] = 1.5
            
         layout = g.layout_reingold_tilford(mode="all")
@@ -492,6 +496,7 @@ class tree_cluster:
                 hm[i,k] = np.median(np.mean(m, axis=0))
                
         sns.heatmap(hm)
+        return hm
         # #fig, ax = plt.subplots()
         # plt.imshow(hm, interpolation='nearest')
 

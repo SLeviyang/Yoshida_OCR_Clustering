@@ -327,68 +327,7 @@ class optimize_tree_cluster:
         sns.heatmap(tb)
       
 
-    
-        
-        
-
-# class optimize_clusters:
-    
-#     def __init__(self, initial_clusters,
-#                  nCPU=4):
-        
-#         starting_points = initial_clusters.get_initial_clusters()
-#         if starting_points is None:
-#             sys.exit(["initial clusters must be formed.",
-#                       "Call generate_initial_clusters method of initial_clusters"])
-        
-#         self.initial_clusters = starting_points
-#         self.nCPU = nCPU
-#         self.num_clusters = initial_clusters.num_clusters
-#         self.g = initial_clusters.g
-#         self.m_list = initial_clusters.m_list
-        
-#     def optimal_col_cluster(self,different = False):    
-            
-#         initial_assignments = np.array([r["assignments"] for r in self.initial_clusters])
-#         m_list = self.m_list.copy()
-#         p = multiprocessing.Pool(processes=self.nCPU)
-#         packed_results = p.starmap(optimizeCluster,
-#                                   zip(initial_assignments,
-#                                       itertools.repeat(self.g),
-#                                       itertools.repeat(m_list),
-#                                       itertools.repeat(self.num_clusters)))  
-#         # need to unpack results...
-#         results = []
-#         for pr in packed_results:       
-         
-#           residual2 = pr[0]
-#           assignments = pr[1]
-            
-#           # debug
-#           if np.any(assignments == -1):
-#               sys.exit("a column has not been assigned to a cluster!")
-             
-#           results.append({'assignments':assignments,
-#                           'residual':residual2})
-        
-#         self.results = results
-           
-#     def load_results(self):
-#         return pd.read_csv(self.col_cluster_file,
-#                            sep=",")    
-
-#     def save_results(self):
-#         assign_m = np.array([r["assignments"] for r in self.results])
-#         res = [r["residual"] for r in self.results]
-        
-#         tb = pd.DataFrame(assign_m,
-#                           columns=self.g.vs["name"])
-#         tb.insert(tb.shape[1], "residual", res)
-        
-#         tb.to_csv(self.col_cluster_file,
-#                   sep=",",
-#                   index=False)    
-        
+   
 ######################################################
 # computational methods
 def computeCluster(cut_edges,g,m_list,num_clusters):

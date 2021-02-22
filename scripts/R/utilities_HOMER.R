@@ -2,45 +2,54 @@
 
 #' Use HOMER utility to find binding motifs in sequences
 #'
-#' @param seqs A DNAStringSet
-#' @param fasta_file path to a fasta file
-#' @param motif_file path to a HOMER motif file (see
+#' @param seq_file fasta file
+#' @param control_file fasta
+#' @param motif_list a list of PWM
 #' http://homer.ucsd.edu/homer/motif/creatingCustomMotifs.html for format)
 #' @param just_plus_strand should the reverse complement be searched?
 #' @param HOMER_BIN_dir path to HOMER's bin/
+#' @score_matrix should a score matrix be returned, or the raw HOMER output?
 #'
 #' @details if both seqs and fasta file are not NULL, seqs is used
 #'
 #' @return a data.frame containing HOMER output
-find_motifs.homer <- function(seqs,
-                             control_seqs,
-                             motif_file,
-                             just_plus_strand=F,
-                             HOMER_dir=HOMER_PATH)
+find_motifs.homer <- function(seq_file,
+                             control_file,
+                             motif_list,
+                             just_plus_strand,
+                             HOMER_dir,
+                             use_cumulative_binomial=T)
 {
+  if (length(motif_list) != 1)
+    return ("only one motif is allowed, for more just call function repeatedly")
+  
+  motif_file <- paste("temp_homer_motif", round(1E6*runif(1)), ".txt", sep="")
+  write_homer_motifs.BM(motif_list, motif_file)
+  nmotifs <- length(motif_list)
+  
+  cat("processing", nmotifs, "motifs\n")
 
   out_dir <- paste("homer_workdir_temp", round(1E8*runif(1)), "/", sep="")
   dir.create(out_dir)
   outfile <- paste(out_dir, "HOMER_analysis.txt", sep="")
-  f1 <- paste("seqs_HOMMER", round(1E8*runif(1)), ".fasta", sep="")
-  f2 <- paste("control_HOMMER", round(1E8*runif(1)), ".fasta", sep="")
-
-  writeXStringSet(seqs, f1)
-  writeXStringSet(control_seqs, f2)
 
   spath <- Sys.getenv("PATH")
   # check if homer is already there
   if (!grepl(HOMER_dir, spath))
     spath <- paste(spath, HOMER_dir, sep=":")
 
-  Sys.setenv(f1=f1, f2=f2, mf=motif_file,
+  Sys.setenv(f1=seq_file, f2=control_file, mf=motif_file,
              od=out_dir, PATH=spath,
              of=outfile)
   if (just_plus_strand)
     Sys.setenv(ps="-norevopp")
   else
     Sys.setenv(ps="")
-  system("findMotifs.pl $f1 fasta $od -fastaBg $f2 -find $mf $ps > $of")
+  if (use_cumulative_binomial)
+    Sys.setenv(cb="-b")
+  else
+    Sys.setenv(cb="")
+  system("findMotifs.pl $f1 fasta $od -fastaBg $f2 -find $mf $cb  $ps > $of")
 
   # in return file, offset is relative to center nucleatide
 
@@ -50,92 +59,31 @@ find_motifs.homer <- function(seqs,
         setNames(c("FASTA.ID", "Offset", "Sequence", "Motif.Name", 
                    "strand", "MotifScore"))
 
-  tb$strand <- ifelse(tb$strand=="+", 1, -1)
-  system("rm $f1")
-  system("rm $f2")
-
   for (f in dir(out_dir, full.names = T))
     file.remove(f)
   system("rm -r $od")
+  file.remove(motif_file)
 
   return  (tb)
 }
 
-#' Run homer findMotifs.pl on DNAStringSet
-#'
-#' @param gene_sequences DNAStringSet
-#' @param control_sequences DNAStringSet with no effect
-#' @param motif_list a list of PWM
-#' @param just_plus_strand should just the + strand be used
-#'
-#' @details HOMER doesn't seem to use the control sequences for scoring
-#'
-#' @return a data.frame containing HOMER output
-sequences2homer <- function(gene_sequences,
-                            control_sequences,
-                            motif_list,
-                            just_plus_strand)
-{
-  temp_motif_file <- paste("temp_homer_motif", round(1E6*runif(1)), ".txt", sep="")
-  write_homer_motifs.BM(motif_list, temp_motif_file)
-  nmotifs <- length(motif_list)
 
-  cat("processing", nmotifs, "motifs\n")
-  all_seqs <- c(gene_sequences, control_sequences)
-  homer <- find_motifs.homer(gene_sequences,
-                    control_sequences,
-                    temp_motif_file,
-                    just_plus_strand) %>%
-    dplyr::rename(id=FASTA.ID)
-
-  Sys.setenv(tf=temp_motif_file)
-  system("rm $tf")
-
-  return (homer)
-}
-
-#' Create a score matrix (seqs by motifs)
+#' Get the max score of a motif for each sequence using homer
 #' 
-#' @param seqs a character.vector
-#' @param motifs a names list of BM objects, see below
-HOMERscoreMatrix <- function(seqs, motifs, just_plus_strand=F,
-                             message=NA)
+#' @param tb a data.frame returned by find_motifs.homer
+#' @param seq_names names of sequences in fasta files sent to find_motifs.homer
+HOMER2MaxScore.homer <- function(homer_tb, seq_names)
 {
-  motif_names <- names(motifs)
-  nm <- length(motifs)
-  dna_seqs <- DNAStringSet(seqs) %>% 
-              setNames(paste("seq", 1:length(seqs), sep=""))
+  score_tb <- plyr::ddply(homer_tb, .(FASTA.ID), function(ctb) {
+    data.frame(score=max(ctb$MotifScore), stringsAsFactors = F)
+  }) %>% dplyr::rename(id=FASTA.ID)
+  missing_seqs <- setdiff(seq_names, score_tb$id)
+  if (length(missing_seqs) > 0) 
+    score_tb <- rbind(score_tb,
+                      data.frame(id=missing_seqs, score=NA))
   
-  m <- sapply(1:length(motifs), function(i) {
-    if (!is.na(message))
-      print (message)
-    cat("processing motif", i, "of", nm, ":", motif_names[i], "\n")
-    tb <- sequences2homer(dna_seqs, dna_seqs[1], motifs[i], just_plus_strand)
-    # when a probability in the PWM is 0, HOMER might not return a score
-  
-    missing_seqs <- setdiff(names(dna_seqs), tb$id)
-    if (length(missing_seqs) > 0) {
-      tb_missing <- plyr::adply(missing_seqs, 1, function(sn) {
-        data.frame(id=sn, Offset=NA, Sequence=NA,
-                   Motif.Name=motif_names[i], strand=NA, MotifScore=NA)
-      }, .id=NULL)
-      tb <- rbind(tb, tb_missing)
-    }
-    plyr::daply(tb, .(id), function(tbm) {
-      if (all(is.na(tbm$MotifScore)))
-        return (NA)
-      else
-        return (max(tbm$MotifScore, na.rm=T))
-    })
-  })
-  if (length(dna_seqs)==1) {
-    m <- matrix(m, nrow=1)
-  } else if (length(motif_names)==1) {
-    m <- matrix(m, ncol=1)
-  }
-  colnames(m) <- motif_names
-  
-  return (m)
+  score_tb <- score_tb[match(seq_names, score_tb$id),]
+  return (score_tb)
 }
 
 

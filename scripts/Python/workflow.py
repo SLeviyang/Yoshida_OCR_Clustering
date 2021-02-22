@@ -52,15 +52,19 @@ def make_all_workflows(ncore=4):
 # used
 # @param max_K columns cluster for k=2,3,..,max_K
 
+
 class workflow:
     
+    # contains TF motifs
+    #meme_file = conf.INPUT_DATA + "JASPAR2020_CORE_vertebrates_non-redundant_pfms_meme.txt"
+    meme_file = conf.INPUT_DATA + "meme.txt"
     def __init__(self, 
                  binary_matrix_source,
                  edge_FDR,
                  idr_FDR = None,
                  count_cutoff = None,
-                 n_starting_points = 2,
-                 max_K=5,
+                 n_starting_points = 10,
+                 max_K=12,
                  ncore=4):
         
         # check if genomics should be implemented
@@ -101,8 +105,11 @@ class workflow:
         # starting data for the workflow
         self.matrix_file = self.output_dir + "matrix.csv"
         self.bed_file = self.output_dir  + "loci.bed"
+        
+        # genomics info
         self.genomics_file = self.output_dir + "genomics.csv"
         self.sequences_file = self.output_dir  + "sequences.csv"
+        
         # row clustering files
         self.edge_file = self.output_dir  + "edges.csv"
         self.cluster_file = self.output_dir + "clusters.csv"
@@ -120,7 +127,8 @@ class workflow:
                                       idr_FDR, count_cutoff)
         
         # 1b. if genomics is needed, use bed file to create
-        # a genomics table and the loci sequences
+        # a genomics table, the loci sequences, and TF
+        # motif scores
         if self.include_genomics:
             if not os.path.isfile(self.sequences_file):
               print("creating sequence file...")
@@ -235,8 +243,8 @@ class workflow:
       os.remove(TSSfile)
       os.remove(outfile)
       os.remove(temp_bed)
-    
-        
+      
+  
         
     def cluster_rows(self, edge_FDR):
         m = self.load_matrix()
@@ -318,6 +326,48 @@ class workflow:
     
     def load_m_list(self):
         return self.m_list
+    
+    # returns a tree cluster object
+    def form_tree_cluster_from_fits(self, k, index=None):
+        tb = self.load_fits()
+        tb = tb[tb["K"] == k]
+        
+        if index is None:
+            index = np.argmin(tb["residual"])
+        tb = tb.drop(["residual","generated","K"], axis=1)
+        a = tb.iloc[index].to_numpy()
+        
+        g = self.load_tree()
+        m_list = self.load_m_list()
+        tc = tree_cluster.tree_cluster(k, g, m_list)
+        tc.initialize_components(assignments=a)
+        
+        return tc
+        
+    def load_TF_score_matrix(self, cluster_num, null=False):
+     
+        # score matrices are produced by the R script create_TF_score_matrix.R
+        TF_dir = self.output_dir + "TF_scores/"
+        files = os.listdir(TF_dir)
+        
+        if null:
+            s = "TF_null_score_matrix_cluster_" + str(cluster_num) + ".csv"
+        else:
+            s = "TF_score_matrix_cluster_" + str(cluster_num) + ".csv"
+        f = [f for f in files if s in f]
+        
+        if not len(f) == 1:
+            print(["no score matrix exists for",
+                      "cluster", cluster_num, 
+                      "call R script to generate!"])
+            return None
+        
+        print(["loading", f])
+        m = pd.read_csv(TF_dir + f[0], sep=",")
+          
+        return m
+        
+        
     
     def get_row_cluster_view(self):
         return row_cluster_view(self.load_matrix(),

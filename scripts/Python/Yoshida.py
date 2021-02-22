@@ -191,7 +191,7 @@ class Yoshida_RNAseq:
     transform_R_script = "../R/dispersion.R"
     
     def __init__(self):
-        self.y_ATACseq = Yoshida_ATACseq()
+        self.y_ATACseq = Yoshida_ATACseq_counts()
         if not os.path.isdir(self.RNAseq_dir):
             os.mkdir(self.RNAseq_dir)
         if not os.path.isfile(self.RNAseq_table_file):
@@ -232,11 +232,15 @@ class Yoshida_RNAseq:
                      
         tb.to_csv(self.RNAseq_table_file, sep=",", index=False)
         
+    # converts a cell type name in RNAseq GEO datasets to the
+    # corresponding cell type name in Yoshida_tree
     def convert_RNAseq_to_Yoshida(self, raw_name):
+      # last two characters are sample number, e.g #1
       name = raw_name[:-2]
       if name in Yoshida_tree().get_cell_types():
           return name
       
+      # conversions from RNAseq name to Yoshida name
       RNAseq = ['MF.SI.LP',
              'MMP3.48+.BM',
              'MMP4.135+.BM',
@@ -260,8 +264,7 @@ class Yoshida_RNAseq:
       
     # computes mean of cell types replicates and
     # filter out silent genes
-    def create_averaged_RNAseq(self, 
-                                    active_gene_cutoff=50):
+    def create_averaged_RNAseq(self, active_gene_cutoff=0):
         m = pd.read_csv(self.RNAseq_table_file, sep=",")
         if active_gene_cutoff > 0:
             max_m = np.max(m.iloc[:,1:m.shape[1]], 1)
@@ -269,7 +272,7 @@ class Yoshida_RNAseq:
   
         exp_list = []
         genes = m["gene"].copy()
-        replicate_cell_types = np.array(self.get_cell_types())
+        replicate_cell_types = np.array(self.get_sample_cell_types())
         cell_types = np.unique(replicate_cell_types)
         for ct in cell_types:
             ind = np.where(replicate_cell_types == ct)[0]
@@ -310,13 +313,22 @@ class Yoshida_RNAseq:
     
     # returns cell types associated with columns.  
     # First column is gene name and is not included.
-    def get_cell_types(self):
+    def get_sample_cell_types(self):
         d = pd.read_csv(self.RNAseq_table_file, sep=",", nrows=1,
                         header=None)
         
         return d.iloc[0,1:d.shape[1]].tolist()
     
+    def get_averaged_cell_types(self):
+        d = pd.read_csv(self.quantiled_RNAseq_table_file, sep=",", nrows=1,
+                        header=None)
+        
+        return d.iloc[0,1:d.shape[1]].tolist()
+    
     ###  accessor method
+    def load_all_samples(self):
+        return pd.read_csv(self.RNAseq_table_file,
+                           sep=",")
     
     def load_quantiled(self):
         return pd.read_csv(self.quantiled_RNAseq_table_file, 
