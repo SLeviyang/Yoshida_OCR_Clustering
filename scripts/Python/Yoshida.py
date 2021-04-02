@@ -173,37 +173,55 @@ class Yoshida_ATACseq_counts:
 # Transcription factors used in Yoshida et al
 class Yoshida_TF:
     
-     def get_significant_TF(self):
-        tb = pd.read_csv(self.TF_file)
-        return tb[tb["Significant"]]["TF"].tolist()
+    TF_file = conf.INPUT_DATA + "Yoshida_Table_S5.csv"
     
-# Creates table of RNAseq with rows as mm10 genes and columns
+    def get_TF(self, significant=False):
+        tb = pd.read_csv(self.TF_file)
+        if significant:
+          tf = tb[tb["Significant"]]["TF"].tolist()
+        else:
+          tf = tb["TF"].tolist()
+          
+        return [z.upper() for z in tf]
+    
+# Processes RNAseq data 
+# Limits to cell types in Yoshida tree and averages counts across replicates
+#
+# The following RNAseq data.frames are created (genes by cell types).
+# In all cases counts are given in log2
+# "raw" (count): raw counts restricted to cell types in Yoshida_tree
+# "averaged" (count):  raw counts averaged across cell type replicates
+# "quantiled" (log2): averaged counts with gene counts quantile normalized 
+# across cell types
+    
+        
 # as samples.  There are multiple samples for each cell type.
 # Cell types restricted to cell types in ATACseq data
 class Yoshida_RNAseq:
-    raw_RNAseq = conf.INPUT_DATA + "GSE109125_Gene_count_table_GENCODE_vM25.csv"
-    RNAseq_dir = conf.DATA_DIR + "Yoshida/"
-    RNAseq_table_file = RNAseq_dir + "Yoshida_RNAseq.csv"
-    averaged_RNAseq_table_file = RNAseq_dir + "Yoshida_averaged_RNAseq.csv"
-    quantiled_RNAseq_table_file = RNAseq_dir + "Yoshida_quantiled_RNAseq.csv"
-    transformed_RNAseq_table_file = RNAseq_dir + "Yoshida_transformed_RNAseq.csv"
+    GEO_RNAseq = conf.INPUT_DATA + "GSE109125_Gene_count_table_GENCODE_vM25.csv"
     
-    transform_R_script = "../R/dispersion.R"
+    RNAseq_dir = conf.DATA_DIR + "Yoshida/"
+    RNAseq_file_prefix = RNAseq_dir + "Yoshida_RNAseq_"
     
     def __init__(self):
-        self.y_ATACseq = Yoshida_ATACseq_counts()
-        if not os.path.isdir(self.RNAseq_dir):
-            os.mkdir(self.RNAseq_dir)
-        if not os.path.isfile(self.RNAseq_table_file):
-            self.create_RNAseq_table()
-            self.create_averaged_RNAseq()
-            self.create_quantiled_RNAseq()
-            self.create_transformed_RNAseq()
+      self.y_ATACseq = Yoshida_ATACseq_counts()
+      if not os.path.isdir(self.RNAseq_dir):
+         os.mkdir(self.RNAseq_dir)
             
+      if not os.path.isfile(self.RNAseq_file_prefix + "raw.csv"):
+        self.create_raw_RNAseq()  
+      if not os.path.isfile(self.RNAseq_file_prefix + "averaged.csv"):
+        self.create_averaged_RNAseq()  
+      if not os.path.isfile(self.RNAseq_file_prefix + "quantiled.csv"):
+        self.create_quantiled_RNAseq()  
+      #if not os.path.isfile(self.RNAseq_file_prefix + "zoom.csv"):
+      #  self.create_zoom_RNAseq() 
+      self.g = Yoshida_tree().load_igraph()
+        
     ## constructor methods
         
-    def create_RNAseq_table(self):
-        tb = pd.read_csv(self.raw_RNAseq, sep=",")
+    def create_raw_RNAseq(self):
+        tb = pd.read_csv(self.GEO_RNAseq, sep=",")
         
         tb_genes = [g.upper() for g in tb["GeneSymbol"]]
         # limit to genes in mm10 biomart since I have TSS for those
@@ -230,7 +248,9 @@ class Yoshida_RNAseq:
         tb = tb.drop(["GeneSymbol"], axis=1)       
         tb = tb[tb["gene"].isin(mm10_genes)]
                      
-        tb.to_csv(self.RNAseq_table_file, sep=",", index=False)
+        
+        tb.to_csv(self.RNAseq_file_prefix + "raw.csv", 
+                  sep=",", index=False)
         
     # converts a cell type name in RNAseq GEO datasets to the
     # corresponding cell type name in Yoshida_tree
@@ -265,18 +285,18 @@ class Yoshida_RNAseq:
     # computes mean of cell types replicates and
     # filter out silent genes
     def create_averaged_RNAseq(self, active_gene_cutoff=0):
-        m = pd.read_csv(self.RNAseq_table_file, sep=",")
+        m = self.load_raw_RNAseq()
         if active_gene_cutoff > 0:
             max_m = np.max(m.iloc[:,1:m.shape[1]], 1)
             m = m.loc[max_m >= active_gene_cutoff]
   
         exp_list = []
-        genes = m["gene"].copy()
-        replicate_cell_types = np.array(self.get_sample_cell_types())
-        cell_types = np.unique(replicate_cell_types)
+        genes = m["gene"]
+        y_cell_types = Yoshida_tree().load_igraph().vs["name"]
+        cell_types = list(set(y_cell_types).intersection(m.columns))
         for ct in cell_types:
-            ind = np.where(replicate_cell_types == ct)[0]
-            m_ct = m.iloc[:,(ind+1)]
+            ind = np.where(m.columns == ct)[0]
+            m_ct = m.iloc[:,ind]
             m_ct_mean = np.mean(m_ct, 1)
             exp_list.append(m_ct_mean)
              
@@ -284,12 +304,13 @@ class Yoshida_RNAseq:
                          columns=cell_types)
         m.insert(0, "gene", genes.tolist())
             
-        m.to_csv(self.averaged_RNAseq_table_file, sep=",", index=False)
+        m.to_csv(self.RNAseq_file_prefix + "averaged.csv", 
+                 sep=",", index=False)
                    
         return m
     
     def create_quantiled_RNAseq(self):
-        tb = pd.read_csv(self.averaged_RNAseq_table_file, sep=",")
+        tb = self.load_averaged_RNAseq()
         m = tb.drop("gene", axis=1).to_numpy()
         
         mq = qnorm.quantile_normalize(np.log2(1+m), axis=1)
@@ -297,7 +318,8 @@ class Yoshida_RNAseq:
         tb_out.insert(0, "gene", tb["gene"].tolist())
         tb_out.set_axis(tb.columns.tolist(), axis=1, inplace=True)
         
-        tb_out.to_csv(self.quantiled_RNAseq_table_file, sep=",", index=False)
+        tb_out.to_csv(self.RNAseq_file_prefix + "quantiled.csv", 
+                      sep=",", index=False)
         
     
     # applies a variance stabilizing transform across the genes.
@@ -305,57 +327,63 @@ class Yoshida_RNAseq:
     # apply the Anscombe transformation.  To estimate the dispersion
     # parameter (phi in Yoshida and k in Ascombe) I used the R
     # package varistran on the average RNAseq file, see dispersion.R
-    def create_transformed_RNAseq(self):
+    def create_zoom_RNAseq(self):
         
       os.environ["rf"] = self.transform_R_script
       os.system('/usr/local/bin/Rscript $rf')
         
     
-    # returns cell types associated with columns.  
-    # First column is gene name and is not included.
-    def get_sample_cell_types(self):
-        d = pd.read_csv(self.RNAseq_table_file, sep=",", nrows=1,
-                        header=None)
-        
-        return d.iloc[0,1:d.shape[1]].tolist()
-    
-    def get_averaged_cell_types(self):
-        d = pd.read_csv(self.quantiled_RNAseq_table_file, sep=",", nrows=1,
+    def get_cell_types(self):
+        d = pd.read_csv(self.RNAseq_file_prefix + "averaged.csv", 
+                        sep=",", nrows=1,
                         header=None)
         
         return d.iloc[0,1:d.shape[1]].tolist()
     
     ###  accessor method
-    def load_all_samples(self):
-        return pd.read_csv(self.RNAseq_table_file,
+    def load_raw_RNAseq(self):
+        return pd.read_csv(self.RNAseq_file_prefix + "raw.csv",
                            sep=",")
     
-    def load_quantiled(self):
-        return pd.read_csv(self.quantiled_RNAseq_table_file, 
+    def load_averaged_RNAseq(self):
+        return pd.read_csv(self.RNAseq_file_prefix + "averaged.csv",
                            sep=",")
     
-    def load_transformed(self):
-        return pd.read_csv(self.transformed_RNAseq_table_file, 
+    def load_quantiled_RNAseq(self):
+        return pd.read_csv(self.RNAseq_file_prefix + "quantiled.csv", 
                            sep=",")
     
-    ### computational
-    def cluster(self, K, permuted=False):
-        tb = self.load_quantiled()
-        m = tb.drop("gene", axis=1).to_numpy()
+    # use limma-zoom to perform a differential expression
+    # analysis
+    # constrasts should be a binary array where 1 is
+    # response and 0 is control
+    @staticmethod
+    def DE(constrasts,
+           expressions_file,
+           DE_R_script="../R/DE.R"):
         
-        if permuted:
-          nc = m.shape[1]
-          for i in range(len(m)):
-              m[i,:] = m[i,np.random.permutation(nc)]
-        z = np.corrcoef(m)
-        z = np.abs(z)
-        np.fill_diagonal(z, 0)
-        #assignments, error, nfound = BioC.kcluster(m, nclusters=K, 
-        #                                           npass=1, method='a', 
-         #                             dist='e')
-        plt.hist(np.max(z, 1))  
-        print(np.quantile(np.max(z,1), .99))
-        return tb, m, z
+      c_file = "contrasts_" + str(np.random.uniform()) + ".txt"
+      o_file = "DE_output_" + str(np.random.uniform()) + ".csv"
+      
+      pd.DataFrame({'category':constrasts}).to_csv(c_file,
+                                                   index=None)
+      
+      os.environ["c_file"] = c_file
+      os.environ["e_file"] = expressions_file
+      os.environ["o_file"] = o_file
+      os.environ["rp"] = DE_R_script
+      
+      os.system('$rp $e_file $c_file $o_file')
+      
+      d =  pd.read_csv(o_file, sep=",")
+     
+      os.remove(c_file)
+      os.remove(o_file)
+     
+      
+      return d
+  
+      
         
-    
+  
  

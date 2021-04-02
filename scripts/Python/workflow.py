@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import igraph as ig
 import seaborn as sns
 from pandarallel import pandarallel as pll
+from sklearn.cluster import KMeans
 
 
 def make_all_workflows(ncore=4):
@@ -23,21 +24,19 @@ def make_all_workflows(ncore=4):
                     columns=["idr_FDR", "edge_FDR"]).sort_values("idr_FDR")
   
   # make idr workflows
-  pll.initialize(nb_workers=ncore,
-                 progress_bar=True)
-  tb.apply(lambda s : workflow("idr", 
-                               edge_FDR=s["edge_FDR"],
-                               idr_FDR=s["idr_FDR"]),
-           axis=1)
+  for i in range(len(tb)):
+      workflow("idr", 
+               edge_FDR=tb["edge_FDR"].iloc[i],
+               idr_FDR=tb["idr_FDR"].iloc[i])
   
-  count_cutoffs = [2,5,10]
-  tb = pd.DataFrame([[x,y] for x in count_cutoffs for y in edge_FDR],
-                    columns=["cutoff", "edge_FDR"]).sort_values("cutoff")
+  # count_cutoffs = [2,5,10]
+  # tb = pd.DataFrame([[x,y] for x in count_cutoffs for y in edge_FDR],
+  #                   columns=["cutoff", "edge_FDR"]).sort_values("cutoff")
   
-  tb.apply(lambda s : workflow("count", 
-                               edge_FDR=s["edge_FDR"],
-                               count_cutoff=s["cutoff"]),
-           axis=1)
+  # tb.apply(lambda s : workflow("count", 
+  #                              edge_FDR=s["edge_FDR"],
+  #                              count_cutoff=s["cutoff"]),
+  #          axis=1)
 
 
 # For a particular binary matrix and bed file, run through the
@@ -127,8 +126,7 @@ class workflow:
                                       idr_FDR, count_cutoff)
         
         # 1b. if genomics is needed, use bed file to create
-        # a genomics table, the loci sequences, and TF
-        # motif scores
+        # a genomics table, the loci sequences
         if self.include_genomics:
             if not os.path.isfile(self.sequences_file):
               print("creating sequence file...")
@@ -144,7 +142,7 @@ class workflow:
           print("clustering rows of binary matrix...")
           self.cluster_rows(edge_FDR)
           
-        self.m_list = self.get_row_cluster_view().form_m_list(min_cluster_size=50)
+        self.m_list = self.get_row_cluster_view().form_m_list(min_cluster_size=30)
           
         # 3. create starting points for column clustering
         if not os.path.isfile(self.starting_points_file):
@@ -324,6 +322,7 @@ class workflow:
     def load_tree(self):
         return self.g
     
+    # input matrix split into list of matrices corresponding to row clusters
     def load_m_list(self):
         return self.m_list
     
@@ -344,30 +343,53 @@ class workflow:
         
         return tc
         
-    def load_TF_score_matrix(self, cluster_num, null=False):
-     
-        # score matrices are produced by the R script create_TF_score_matrix.R
-        TF_dir = self.output_dir + "TF_scores/"
-        files = os.listdir(TF_dir)
+    def load_TF_matrix(self):
         
-        if null:
-            s = "TF_null_score_matrix_cluster_" + str(cluster_num) + ".csv"
-        else:
-            s = "TF_score_matrix_cluster_" + str(cluster_num) + ".csv"
-        f = [f for f in files if s in f]
+        motif_file = self.output_dir + "motif.csv"
+       
+        if not os.path.isfile(motif_file):
+            print(["motif match file has not been created",
+                   "see script/R/create_TF_matrices.R"])
+      
+            
+        m = pd.read_csv(motif_file, sep=",")
         
-        if not len(f) == 1:
-            print(["no score matrix exists for",
-                      "cluster", cluster_num, 
-                      "call R script to generate!"])
-            return None
-        
-        print(["loading", f])
-        m = pd.read_csv(TF_dir + f[0], sep=",")
-          
         return m
+    
+    # for each row cluster, split columns by on/off. 
+    # If k=0 then each column is indpendently assigned,
+    # otherwise the tree-based column clusters are assigned
+    def biclusters_to_response_control(self, 
+                                      m_list=None,
+                                      k=0):
+      rcv = self.get_row_cluster_view()
+      atacseq = rcv.column_means_of_clusters(m_list=m_list)
+     
+      atac_01 = []
+      for i in range(len(atacseq)):
+        X = atacseq[i,:]
+        X = X.reshape([len(X), 1])
+        kmeans = KMeans(n_clusters=2, random_state=0).fit(X)
+        labels = kmeans.labels_
+        if np.mean(X[labels==1,:]) < np.mean(X[labels==0,:]):
+          labels = 1 - labels
+   
+        atac_01.append(labels)
+      
+      atac_01 = np.array(atac_01)
+      if k > 0:
+        tc = self.form_tree_cluster_from_fits(k=k)
+        assignments = tc.get_assignments()
+        for ck in range(k):
+          print(ck)
+          cols = np.where(assignments == ck)[0]
+          clust_votes = np.mean(atac_01[:,cols],1)
+          for cc in cols:
+            atac_01[:,cc] = 1 * (clust_votes > .5)
         
+      return atac_01
         
+
     
     def get_row_cluster_view(self):
         return row_cluster_view(self.load_matrix(),
@@ -427,7 +449,7 @@ class row_cluster_view:
         
         return pd.DataFrame(info)
     
-    def form_m_list(self, min_cluster_size=50):
+    def form_m_list(self, min_cluster_size=30):
         ci = self.get_cluster_info()
         ci = ci[ci["size"] >= min_cluster_size]
         
@@ -463,7 +485,15 @@ class row_cluster_view:
         g = g.iloc[rows]
         
         return g
-        
+    
+    def column_means_of_clusters(self, m_list=None):
+      if m_list is None:
+        m_list = self.form_m_list()
+      
+      atacseq = np.array([np.mean(m, axis=0) for m in m_list])
+  
+      return atacseq
+    
     
     # plot column means
     def scatterplot(self, index):      

@@ -3,6 +3,7 @@ import numpy as np
 import igraph as ig
 import re
 import pdb
+import os
 
 # find positions in l2 that match the elements of l1, 
 # -1 if not present
@@ -32,6 +33,24 @@ def nucleotide_frequency_table(seqs, nucs=["A", "C", "G", "T",
        
     tb = pd.DataFrame(nuc_table, columns=nucs)
     return tb
+
+def ontology_analysis(genes):
+      
+    
+    gene_file = "temp_genes_" + str(np.random.uniform()) + ".csv"
+    out_file = "temp_genes_out_" + str(np.random.uniform()) + ".csv"
+    
+    pd.Series(genes).to_csv(gene_file, sep=",", 
+                            index=False, header=False)
+    os.environ["gf"] = gene_file
+    os.environ["of"] = out_file
+    os.system("/usr/local/bin/Rscript ../R/ontology.R $gf $of")
+      
+    z =  pd.read_csv(out_file, sep=",")
+    z = z[z["term_size"] < 500]
+    os.remove(gene_file)
+    os.remove(out_file)
+    return z
 
 def find_root(g):
      # check that g is a tree
