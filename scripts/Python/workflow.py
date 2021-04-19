@@ -13,7 +13,6 @@ import pdb
 import matplotlib.pyplot as plt
 import igraph as ig
 import seaborn as sns
-from pandarallel import pandarallel as pll
 from sklearn.cluster import KMeans
 
 
@@ -387,7 +386,7 @@ class workflow:
           for cc in cols:
             atac_01[:,cc] = 1 * (clust_votes > .5)
         
-      return atac_01
+      return atac_01, assignments
         
 
     
@@ -554,14 +553,3 @@ class row_cluster_view:
         tb = pd.DataFrame(means_m)
         tb.index = indices
         sns.heatmap(tb)
-      
-
-    
-        
-            
-            
-        
-            
-        
-        
-        

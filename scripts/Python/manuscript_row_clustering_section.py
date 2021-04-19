@@ -86,20 +86,43 @@ def make_row_cluster_matrix_heatmap():
     ct = ct.merge(pd.DataFrame({'cell_type':w.get_cell_types(),
                                 'w_index':range(w_ct.shape[0])}), 
                   on="cell_type")
-    col_order = ct.sort_values("cluster")["w_index"]
+    
+    ct.sort_values("cluster",inplace=True)
+    
+    col_order = ct["w_index"]
     means_m = np.array(means)[:,col_order]
-    tb = pd.DataFrame(means_m)
+    tb = pd.DataFrame(means_m, columns = col_order)
     tb.index = indices
-    sns.heatmap(tb, cmap="viridis")
+    
+    palette = sns.color_palette('tab10')
+    col_colors = ct['cluster'].apply(lambda x: palette[x-1])
+    
+    g = sns.clustermap(tb.values, row_cluster=False, col_cluster=False, cmap='inferno', col_colors = [col_colors], xticklabels=False)
+    
+        #Set position of col colors
+    ax_col_colors = g.ax_col_colors
+    box = ax_col_colors.get_position()
+    box_heatmap = g.ax_heatmap.get_position()
+    ax_col_colors.set_position([box_heatmap.min[0], box.y0*1.01, box.width, box.height])
+    
+    # Draw the legend bar for the classes                 
+    for i, label in enumerate(ct['cluster_name'].unique()):
+        g.ax_col_dendrogram.bar(0, 0, color=palette[i],
+                                label=label, linewidth=0)
+    g.ax_col_dendrogram.legend(loc="center", ncol=5)
+    
+    # Adjust the postion of the main colorbar for the heatmap
+    g.cax.set_position([.1, .2, .03, .45])
     
     outfile = mm.FIGURE_DIR + "cluster_matrix" + ".jpeg"
     plt.savefig(outfile, bbox_inches='tight')
     
     return means_m
 
-def make_bicluster_matrix_heatmap():
+def make_bicluster_matrix_heatmap(k = 3):
     w = workflow.workflow("idr", 0.001, 0.01)
-    a = w.biclusters_to_response_control(k=12)
+    
+    a, assignments = w.biclusters_to_response_control(k = k)
     
      # arrange by column cluster
     ct = mm.load_cell_type_master_table()
@@ -109,14 +132,41 @@ def make_bicluster_matrix_heatmap():
     ct = ct.merge(pd.DataFrame({'cell_type':w.get_cell_types(),
                                 'w_index':range(w_ct.shape[0])}), 
                   on="cell_type")
-    col_order = ct.sort_values("cluster")["w_index"]
+    ct["assignments"] = assignments
+    col_order = ct.sort_values("assignments")["w_index"]
     means_m = np.array(a)[:,col_order]
     tb = pd.DataFrame(means_m)
-    sns.heatmap(tb, cmap="viridis")
     
-    outfile = mm.FIGURE_DIR + "cluster_matrix_01" + ".jpeg"
+    
+    palette = sns.color_palette('tab10')
+    col_colors = ct['cluster'].apply(lambda x: palette[x-1])
+    
+    g = sns.clustermap(tb.values, row_cluster = False, col_cluster = False, cmap="inferno", col_colors = [col_colors], xticklabels = False)
+    
+    #Set position of col colors
+    ax_col_colors = g.ax_col_colors
+    box = ax_col_colors.get_position()
+    box_heatmap = g.ax_heatmap.get_position()
+    ax_col_colors.set_position([box_heatmap.min[0], box.y0*1.01, box.width, box.height])
+    
+    # Draw the legend bar for the classes                 
+    for i, label in enumerate(ct['cluster_name'].unique()):
+        g.ax_col_dendrogram.bar(0, 0, color=palette[i],
+                                label=label, linewidth=0)
+    g.ax_col_dendrogram.legend(loc="center", ncol=5)
+    
+    # Adjust the postion of the main colorbar for the heatmap
+    g.cax.set_position([.1, .2, .03, .45])
+    
+        #Vertical line at the end of each cell type cluster
+    vertical_lines = []
+    col = 0
+    for a in list(set(assignments))[:-1]:
+        col+=len(assignments[assignments==a])
+        vertical_lines.append(col)
+    
+    #Add gridlines to visually seperate clusters
+    g.ax_heatmap.vlines(vertical_lines, linewidths = 2, color='blue', *g.ax_heatmap.get_ylim())
+    
+    outfile = mm.FIGURE_DIR + "cluster_matrix_01_" + str(k) + ".jpeg"
     plt.savefig(outfile, bbox_inches='tight')
-    
-
-    
-    
