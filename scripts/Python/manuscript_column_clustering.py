@@ -146,7 +146,7 @@ def make_var_across_clusters_lineplot():
         ax.set_ylim(0,100)
         
         #Save image
-        fig.savefig(conf.DATA_DIR + '/pctvaracrossclusters.png', dpi=400, bbox_inches='tight', pad_inches=0.01)
+        fig.savefig(conf.DATA_DIR + '/pctvaracrossclusters.jpeg', dpi=400, bbox_inches='tight', pad_inches=0.01)
       
     
     
@@ -290,7 +290,7 @@ def make_pct_var_retained_aproxx_lineplot():
         ax.set_ylim(0,100)
         
         #Save image
-        fig.savefig(conf.DATA_DIR + '/pctenergycharacterized_approx.png', dpi=400, bbox_inches='tight', pad_inches=0.01)
+        fig.savefig(conf.DATA_DIR + '/pctenergycharacterized_approx.jpeg', dpi=400, bbox_inches='tight', pad_inches=0.01)
     
     #Set parameters to edge fdr = 0.001 and idr fdr = 0.01
     w = workflow.workflow("idr", edge_FDR=0.001, idr_FDR=0.01, ncore=4)
@@ -388,7 +388,7 @@ def make_pct_var_retained_method_lineplot():
         ax.set_ylim(0,100)
         
         #Save image
-        fig.savefig(conf.DATA_DIR + '/pctenergycharacterized_methods.png', dpi=400, bbox_inches='tight', pad_inches=0.01)
+        fig.savefig(conf.DATA_DIR + '/pctenergycharacterized_methods.jpeg', dpi=400, bbox_inches='tight', pad_inches=0.01)
     
     #Set parameters to edge fdr = 0.001 and idr fdr = 0.01
     w = workflow.workflow("idr", edge_FDR=0.001, idr_FDR=0.01, ncore=4)
